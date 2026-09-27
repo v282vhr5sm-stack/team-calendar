@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>팀 캘린더</title>
 <meta name="theme-color" content="#2563eb">
+<meta name="referrer" content="no-referrer">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="styles.css?v=12">
+<link rel="stylesheet" href="styles.css?v=13">
 </head>
 <body>
 <div id="app">
@@ -29,6 +30,10 @@
         <button class="btn primary wide" type="submit">로그인</button>
         <p class="msg" id="loginMsg"></p>
       </form>
+      <div class="login-links">
+        <button type="button" class="linkbtn" id="forgotPw">비밀번호를 잊었어요</button>
+        <button type="button" class="linkbtn" id="forgotId">아이디(이메일)를 잊었어요</button>
+      </div>
     </div>
   </section>
 
@@ -86,7 +91,7 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
-<script src="config.js?v=12"></script>
-<script src="app.js?v=12"></script>
+<script src="config.js?v=13"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

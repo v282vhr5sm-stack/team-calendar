@@ -1,9 +1,13 @@
 /* 팀 캘린더 — 대표: 일정 작성/수정, 직원(링크): 보기 + 완료 체크 */
 const $ = (s, el = document) => el.querySelector(s);
 const cfg = window.APP_CONFIG || {};
+// 비밀번호 재설정 메일의 링크로 들어왔는지 (주소의 #type=recovery), 링크 오류(만료 등)
+const AUTH_HASH = location.hash;
+const RECOVERY = /type=recovery/.test(AUTH_HASH);
+const AUTH_ERR = /error_code=([^&]+)/.exec(AUTH_HASH)?.[1] || '';
 // 대표 로그인은 이 기기에 저장되고 자동으로 갱신됨 → 직접 로그아웃하기 전까지 자동 로그인
 const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' },
 });
 const TOKEN_KEY = 'tc.token', NAME_KEY = 'tc.name';
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
@@ -29,7 +33,7 @@ const S = {
   user: null, token: null,
   links: [], events: [], cats: [], company: '', catsInit: true, link: null,
   y: 0, m: 0, sel: '', filter: 'all',
-  ch: null, busy: new Set(), askedName: false, reqId: 0,
+  ch: null, gate: null, busy: new Set(), askedName: false, reqId: 0,
 };
 
 /* ---------- 유틸 ---------- */
@@ -68,6 +72,18 @@ function linkDesc(l) {
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2400); }
 
+/* ---------- 뒤로가기 (안드로이드 뒤로 버튼·브라우저 ‹) ---------- */
+// 뒤로 갈 기록이 없으면 앱 안 브라우저(네이버·카톡 등)가 통째로 닫힘 → 기록 한 칸을 깔아두고 가로챔
+const modalStack = [];
+let lastBack = 0;
+function armBack() { if (!(history.state && history.state.tcGuard)) history.pushState({ tcGuard: 1 }, ''); }
+window.addEventListener('popstate', () => {
+  if (modalStack.length) { modalStack[modalStack.length - 1](undefined); armBack(); return; }
+  if (Date.now() - lastBack < 2000) { history.back(); return; }
+  lastBack = Date.now(); toast('뒤로 버튼을 한 번 더 누르면 닫혀요'); armBack();
+});
+document.addEventListener('pointerdown', armBack, true);
+
 /* ---------- 모달 ---------- */
 function modal({ title, text = '', html = '', buttons = [], onMount }) {
   return new Promise(resolve => {
@@ -75,7 +91,13 @@ function modal({ title, text = '', html = '', buttons = [], onMount }) {
     ov.className = 'ov';
     ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h3>${esc(title)}</h3>${text ? `<p class="mtext">${esc(text)}</p>` : ''}<div class="mbody">${html}</div><div class="mbtns"></div></div>`;
     const box = $('.mbtns', ov);
-    const close = v => { ov.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const close = v => {
+      if (!ov.isConnected) return;
+      ov.remove(); document.removeEventListener('keydown', onKey);
+      const i = modalStack.indexOf(close); if (i >= 0) modalStack.splice(i, 1);
+      resolve(v);
+    };
+    modalStack.push(close);
     const onKey = e => { if (e.key === 'Escape' && ov === document.querySelector('.ov:last-of-type')) close(undefined); };
     for (const b of buttons) {
       const el = document.createElement('button');
@@ -102,6 +124,12 @@ async function boot() {
   const t = new URLSearchParams(location.search).get('g');
   if (t) { lsSet(TOKEN_KEY, t); return startMember(t); }
   const { data: { session } } = await sb.auth.getSession();
+  if (RECOVERY || AUTH_ERR) history.replaceState(null, '', location.pathname);   // 주소창의 인증 정보 지우기
+  if (AUTH_ERR && !session) {
+    showLogin();
+    return modal({ title: '링크를 쓸 수 없어요', text: '메일의 링크가 만료됐거나 이미 사용됐어요. “비밀번호를 잊었어요”로 다시 받아주세요.', buttons: [{ label: '확인', cls: 'primary' }] });
+  }
+  if (session && RECOVERY) { await startOwner(session.user); return setNewPassword(); }
   if (session) return startOwner(session.user);
   const saved = lsGet(TOKEN_KEY);
   if (saved) return startMember(saved);
@@ -119,8 +147,65 @@ function notice(icon, title, text, btn) {
 /* ---------- 로그인 ---------- */
 let loginTab = 'in';
 function showLogin() {
-  stopRealtime(); S.mode = null; document.body.className = '';
+  stopRealtime(); S.mode = null; S.gate = null; document.body.className = '';
   show('login');
+  const f = $('#loginForm'); if (!f.email.value) f.email.value = lsGet('tc.lastEmail') || '';
+}
+
+async function forgotPassword() {
+  await modal({
+    title: '비밀번호 찾기',
+    text: '가입한 이메일로 비밀번호 재설정 링크를 보내드려요. 메일의 링크를 누르면 새 비밀번호를 정할 수 있어요.',
+    html: `<label>가입한 이메일<input id="fp_email" type="email" autocomplete="email" value="${esc($('#loginForm').email.value || lsGet('tc.lastEmail') || '')}"></label>`,
+    buttons: [{ label: '취소' }, { label: '재설정 메일 보내기', cls: 'primary', run: async ov => {
+      const email = $('#fp_email', ov).value.trim();
+      if (!/^\S+@\S+\.\S+$/.test(email)) { toast('이메일을 확인하세요'); return false; }
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      if (error) {
+        const m = error.message || '';
+        toast(/rate|seconds|too many/i.test(m) ? '너무 자주 보냈어요. 잠시 후 다시 시도하세요'
+          : /not authorized|smtp|sending/i.test(m) ? '메일 발송 설정이 아직 안 돼 있어요. 관리자에게 문의하세요' : '보내지 못했어요: ' + m);
+        return false;
+      }
+      lsSet('tc.lastEmail', email);
+      modal({ title: '메일을 보냈어요', text: `${email} 메일함을 확인하세요. (안 보이면 스팸함도 확인)\n메일의 링크는 크롬에서 열어주세요.`, buttons: [{ label: '확인', cls: 'primary' }] });
+    } }],
+  });
+}
+
+async function forgotEmail() {
+  await modal({
+    title: '아이디(이메일) 찾기',
+    text: '가입할 때 적은 회사 이름을 입력하면, 가입한 이메일을 일부 가려서 보여드려요.',
+    html: `<label>회사 이름<input id="fe_co" maxlength="40" placeholder="예: 당근렌탈"></label><p class="msg ok" id="fe_out"></p>`,
+    buttons: [{ label: '닫기' }, { label: '찾기', cls: 'primary', run: async ov => {
+      const co = $('#fe_co', ov).value.trim();
+      if (co.length < 2) { toast('회사 이름을 입력하세요'); return false; }
+      const { data, error } = await sb.rpc('cal_find_account', { p_company: co });
+      const out = $('#fe_out', ov);
+      if (error) { out.className = 'msg'; out.textContent = '찾지 못했어요: ' + error.message; return false; }
+      out.className = data.length ? 'msg ok' : 'msg';
+      out.textContent = data.length ? '가입한 이메일: ' + data.join(', ') : '그 회사 이름으로 가입한 계정을 찾지 못했어요. 설정의 회사 이름과 똑같이 입력해 보세요.';
+      return false;   // 창을 닫지 않고 결과를 보여줌
+    } }],
+  });
+}
+
+async function setNewPassword() {
+  await modal({
+    title: '새 비밀번호 정하기',
+    text: '앞으로 로그인할 때 쓸 새 비밀번호를 입력하세요.',
+    html: `<label>새 비밀번호 (6자 이상)<input id="np1" type="password" autocomplete="new-password" minlength="6"></label>
+      <label>한 번 더<input id="np2" type="password" autocomplete="new-password" minlength="6"></label>`,
+    buttons: [{ label: '나중에' }, { label: '저장', cls: 'primary', run: async ov => {
+      const a = $('#np1', ov).value, b = $('#np2', ov).value;
+      if (a.length < 6) { toast('6자 이상 입력하세요'); return false; }
+      if (a !== b) { toast('두 비밀번호가 달라요'); return false; }
+      const { error } = await sb.auth.updateUser({ password: a });
+      if (error) { toast('저장 실패: ' + error.message); return false; }
+      toast('새 비밀번호로 바꿨어요');
+    } }],
+  });
 }
 function setLoginTab(tab) {
   loginTab = tab;
@@ -142,6 +227,7 @@ async function onLogin(e) {
       if (company) lsSet('tc.pendingCompany', company);
       const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
       if (error) throw error;
+      lsSet('tc.lastEmail', email);
       if (data.session) return startOwner(data.session.user);
       msg.className = 'msg ok';
       msg.textContent = '확인 메일을 보냈어요. 메일의 링크를 누른 뒤 로그인하세요.';
@@ -149,6 +235,7 @@ async function onLogin(e) {
     } else {
       const { data, error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
+      lsSet('tc.lastEmail', email);
       startOwner(data.user);
     }
   } catch (err) {
@@ -178,6 +265,11 @@ async function startOwner(user) {
   if (!S.links.length && !lsGet('tc.linksInit.' + user.id)) {
     const { error } = await sb.from('cal_links').insert({ name: '전체 일정', kind: 'all' });
     if (!error) { lsSet('tc.linksInit.' + user.id, '1'); await reload(); toast('“전체 일정” 공유 링크를 만들었어요'); }
+  }
+  const lastBk = +lsGet('tc.lastBackup') || 0, nag = lsGet('tc.backupNag');
+  if (S.events.length && Date.now() - lastBk > 14 * 864e5 && nag !== ymd(new Date())) {
+    lsSet('tc.backupNag', ymd(new Date()));
+    setTimeout(() => toast('💾 백업 파일을 받아둔 지 2주가 넘었어요 — ⚙️ 설정에서 받을 수 있어요'), 2500);
   }
   if (!S.catsInit) {
     if (!S.cats.length) await sb.from('cal_categories').insert(DEFAULT_CATS.map(([name, color], i) => ({ name, color, sort: i })));
@@ -216,12 +308,33 @@ async function startMember(token) {
     const d = parse(target); S.sel = target;
     if (d.getFullYear() !== S.y || d.getMonth() !== S.m) { S.y = d.getFullYear(); S.m = d.getMonth(); await reload(); } else render();
   }
-  subscribe('cal-' + token);
+  if (!S.ch) subscribe('cal-' + token);
+}
+
+// 링크가 PIN을 요구하거나, 멈춤/기한 만료/잠김일 때 보여줄 화면
+function memberGate(err, name) {
+  S.gate = err;
+  if (err === 'inactive') return notice('⏸️', '잠시 멈춘 링크예요', '대표님이 이 링크를 잠시 멈췄어요. 다시 열리면 이 화면에서 자동으로 보여요.');
+  if (err === 'expired') return notice('📅', '사용 기간이 끝난 링크예요', '대표님께 새 링크를 받아주세요.');
+  if (err === 'locked') return notice('⏳', '잠시 잠겼어요', 'PIN을 여러 번 틀려서 15분 동안 잠겼어요. 잠시 후 다시 열어주세요.');
+  if (err === 'badpin') lsSet('tc.pin.' + S.token, null);
+  show('notice');
+  $('#notice').innerHTML = `<div class="box"><div style="font-size:40px">🔒</div><h2>${esc(name || '팀 캘린더')}</h2>
+    <p>이 일정표는 PIN(숫자 비밀번호)이 필요해요.<br>대표님께 받은 PIN을 입력하세요.</p>
+    <form id="pinForm"><input id="pinInput" class="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" placeholder="PIN">
+    <p class="msg">${err === 'badpin' ? 'PIN이 맞지 않아요. 다시 확인해 주세요.' : ''}</p>
+    <button class="btn primary wide">확인</button></form></div>`;
+  $('#pinInput').focus();
+  $('#pinForm').onsubmit = e => {
+    e.preventDefault();
+    const v = $('#pinInput').value.trim(); if (!v) return;
+    lsSet('tc.pin.' + S.token, v); S.gate = null; reload();
+  };
 }
 
 async function loadMember() {
   const [a, b] = gridRange();
-  const { data, error } = await sb.rpc('cal_view', { p_token: S.token, p_from: ymd(a), p_to: ymd(b) });
+  const { data, error } = await sb.rpc('cal_view', { p_token: S.token, p_from: ymd(a), p_to: ymd(b), p_pin: lsGet('tc.pin.' + S.token) });
   if (error) throw error;
   return data;
 }
@@ -259,6 +372,9 @@ async function reload() {
         notice('🔒', '링크를 열 수 없어요', '링크가 바뀌었거나 삭제되었어요. 대표님께 새 링크를 받아주세요.', { label: '대표 로그인', run: showLogin });
         return false;
       }
+      if (r.error) { stopRealtime(); memberGate(r.error, r.name); return false; }
+      S.gate = null; show('main');
+      if (!S.ch) subscribe('cal-' + S.token);
       S.link = r.link; S.company = r.company; S.events = r.events; S.cats = r.categories || [];
       $('#brandTitle').textContent = r.link.name;
       $('#brandSub').textContent = [r.company, linkDesc(r.link)].filter(Boolean).join(' · ');
@@ -309,9 +425,10 @@ function subscribe(topic) {
 function stopRealtime() { if (S.ch) { sb.removeChannel(S.ch); S.ch = null; } }
 
 // 실시간 신호를 놓쳐도 맞춰지도록: 화면 복귀·온라인 복귀 시, 그리고 30초마다 확인
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.mode) scheduleReload(0); });
-window.addEventListener('online', () => S.mode && scheduleReload(0));
-setInterval(() => { if (!document.hidden && S.mode) reload(); }, 30000);
+const canPoll = () => S.mode && S.gate !== 'pin' && S.gate !== 'badpin';   // PIN 입력 중에는 화면을 건드리지 않음
+document.addEventListener('visibilitychange', () => { if (!document.hidden && canPoll()) scheduleReload(0); });
+window.addEventListener('online', () => canPoll() && scheduleReload(0));
+setInterval(() => { if (!document.hidden && canPoll()) reload(); }, 30000);
 
 /* ---------- 그리기 ---------- */
 // 지금 화면에 적용되는 링크 규칙 (직원: 받은 링크, 대표: 미리보기로 고른 링크)
@@ -385,7 +502,7 @@ async function toggleDone(id) {
   S.busy.add(id); render();
   try {
     if (S.mode === 'member') {
-      const { data, error } = await sb.rpc('cal_set_done', { p_token: S.token, p_event: id, p_done: next, p_name: who });
+      const { data, error } = await sb.rpc('cal_set_done', { p_token: S.token, p_event: id, p_done: next, p_name: who, p_pin: lsGet('tc.pin.' + S.token) });
       if (error) throw error;
       Object.assign(e, data);
     } else {
@@ -538,11 +655,13 @@ async function openLinks() {
           <div class="gitem">
             <div class="gtop"><span class="kind">${KIND_ICON[l.kind]} ${KIND_LABEL[l.kind]}</span><span class="gname">${esc(l.name)}</span></div>
             <div class="gdesc">${esc(linkDesc(l))}</div>
+            <div class="gbadges">${l.active === false ? '<span class="bdg off">⏸ 멈춤</span>' : ''}${l.pin_hash ? '<span class="bdg">🔒 PIN</span>' : ''}${l.expires_on ? `<span class="bdg">⏳ ${md(l.expires_on)}까지</span>` : ''}<span class="bdg muted">${l.last_seen ? '최근 접속 ' + fmtWhen(l.last_seen) : '아직 접속 없음'}</span></div>
             <div class="glink">${esc(shareUrl(l.token))}</div>
             <div class="gbtns">
               <button class="btn sm primary" data-a="copy" data-id="${l.id}">링크 복사</button>
               ${navigator.share ? `<button class="btn sm" data-a="share" data-id="${l.id}">보내기</button>` : ''}
-              <button class="btn sm" data-a="edit" data-id="${l.id}">수정</button>
+              <button class="btn sm" data-a="edit" data-id="${l.id}">수정·보안</button>
+              <button class="btn sm" data-a="toggle" data-id="${l.id}">${l.active === false ? '▶ 다시 열기' : '⏸ 멈추기'}</button>
               <button class="btn sm" data-a="regen" data-id="${l.id}">링크 새로 만들기</button>
               <button class="btn sm danger" data-a="del" data-id="${l.id}">삭제</button>
             </div>
@@ -555,12 +674,16 @@ async function openLinks() {
         const l = S.links.find(x => x.id === b.dataset.id); if (!l) return;
         const url = shareUrl(l.token), a = b.dataset.a;
         if (a === 'copy') {
-          try { await navigator.clipboard.writeText(url); toast('링크를 복사했어요. 카톡 등에 붙여넣으세요'); }
+          try { await navigator.clipboard.writeText(url); toast(l.pin_hash ? '링크를 복사했어요. PIN은 따로 알려주세요' : '링크를 복사했어요. 카톡 등에 붙여넣으세요'); }
           catch { window.prompt('아래 링크를 복사하세요', url); }
         } else if (a === 'share') {
           navigator.share({ title: l.name, text: `${S.company ? S.company + ' ' : ''}${l.name} (${linkDesc(l)})`, url }).catch(() => {});
         } else if (a === 'edit') {
           if (await editLink(l)) draw();
+        } else if (a === 'toggle') {
+          const { error } = await sb.from('cal_links').update({ active: l.active === false }).eq('id', l.id);
+          if (error) return toast('실패: ' + error.message);
+          await reload(); draw(); toast(l.active === false ? '링크를 다시 열었어요' : '링크를 멈췄어요. 직원 화면이 잠시 안 보여요');
         } else if (a === 'regen') {
           if (!(await confirmBox('링크를 새로 만들까요?', `“${l.name}”의 기존 링크는 더 이상 열리지 않아요. 새 링크를 다시 보내줘야 합니다.`, '새로 만들기', '취소', true))) return;
           const { error } = await sb.from('cal_links').update({ token: newToken() }).eq('id', l.id);
@@ -602,15 +725,33 @@ async function editLink(l, kind0) {
           <div class="mini-grid" id="mini_grid"></div>
         </div>
         <div class="picked" id="picked"></div>
+      </div>
+      <div class="secbox">
+        <div class="sectitle">🔐 링크 보안</div>
+        <label class="switch"><input type="checkbox" id="l_active" ${l?.active === false ? '' : 'checked'}> 링크 사용 중 <small>(끄면 직원 화면이 잠시 멈춰요)</small></label>
+        <label>사용 기한 (선택) — 이 날짜까지만 열려요<input type="date" id="l_exp" value="${l?.expires_on || ''}"></label>
+        <label>PIN 숫자 비밀번호 (선택, 4~8자리)<input id="l_pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off"
+          placeholder="${l?.pin_hash ? '설정됨 · 바꾸려면 새로 입력' : '비워두면 링크만으로 열려요'}"></label>
+        ${l?.pin_hash ? '<label class="switch"><input type="checkbox" id="l_pin_off"> PIN 없애기</label>' : ''}
+        <p class="fieldlabel">PIN을 걸면 링크가 새어 나가도 PIN을 모르는 사람은 볼 수 없어요. PIN은 링크와 따로 알려주세요. (10번 틀리면 15분 잠김)</p>
       </div>`,
     buttons: [{ label: '취소', value: false }, { label: '저장', cls: 'primary', value: true, run: async ov => {
       const name = $('#l_name', ov).value.trim();
+      const pin = $('#l_pin', ov).value.trim();
+      if (pin && !/^[0-9]{4,8}$/.test(pin)) { toast('PIN은 숫자 4~8자리로 입력하세요'); return false; }
       if (!name) { toast('링크 이름을 입력하세요'); return false; }
       if (kind === 'weekdays' && !wd.size) { toast('요일을 하나 이상 고르세요'); return false; }
       if (kind === 'dates' && !dates.size) { toast('날짜를 하나 이상 고르세요'); return false; }
-      const row = { name, kind, weekdays: kind === 'weekdays' ? [...wd].sort() : [], dates: kind === 'dates' ? [...dates].sort() : [] };
-      const { error } = l ? await sb.from('cal_links').update(row).eq('id', l.id) : await sb.from('cal_links').insert(row);
+      const row = { name, kind, weekdays: kind === 'weekdays' ? [...wd].sort() : [], dates: kind === 'dates' ? [...dates].sort() : [],
+        active: $('#l_active', ov).checked, expires_on: $('#l_exp', ov).value || null };
+      const { data: saved, error } = l ? await sb.from('cal_links').update(row).eq('id', l.id).select('id').single()
+                                       : await sb.from('cal_links').insert(row).select('id').single();
       if (error) { toast('저장 실패: ' + error.message); return false; }
+      const pinOff = $('#l_pin_off', ov)?.checked;
+      if (pin || pinOff) {
+        const { error: pe } = await sb.rpc('cal_set_link_pin', { p_link: saved.id, p_pin: pinOff && !pin ? '' : pin });
+        if (pe) { toast('PIN 저장 실패: ' + pe.message); return false; }
+      }
       await reload(); toast(l ? '수정했어요' : '링크를 만들었어요. “링크 복사”로 보내세요');
     } }],
     onMount: ov => {
@@ -655,11 +796,29 @@ async function openSettings() {
       <div class="fieldlabel">분류 (색깔)</div>
       <div class="catlegend" id="s_cats"></div>
       <button type="button" class="btn wide" id="s_cats_btn" style="margin:8px 0 12px">🎨 분류 관리 (추가·수정·삭제)</button>
+      <div class="sectitle">💾 백업</div>
+      <p class="fieldlabel">일정을 고치거나 지우면 서버에 자동으로 기록돼요(180일). 서버 밖에도 사본을 두려면 가끔 백업 파일을 받아두세요.</p>
+      <div class="setgrid">
+        <button type="button" class="btn" id="s_bk_json">📥 백업 파일 받기</button>
+        <button type="button" class="btn" id="s_bk_csv">📊 엑셀용 받기</button>
+        <button type="button" class="btn" id="s_trash">🗑 삭제한 일정 복구</button>
+        <button type="button" class="btn" id="s_bk_restore">📂 백업 파일로 복원</button>
+      </div>
+      <p class="fieldlabel" id="s_bk_last"></p>
+      <input type="file" id="s_bk_file" accept=".json,application/json" hidden>
       <p class="fieldlabel">로그인: ${esc(S.user?.email)} · 이 기기에서 자동 로그인 유지</p>`,
     onMount: ov => {
       const draw = () => { $('#s_cats', ov).innerHTML = legendHtml() || '<span class="fieldlabel">분류가 없어요</span>'; };
       draw();
       $('#s_cats_btn', ov).onclick = async () => { await openCategories(); draw(); };
+      const last = +lsGet('tc.lastBackup') || 0;
+      $('#s_bk_last', ov).textContent = last ? '이 기기에서 마지막 백업: ' + fmtWhen(new Date(last).toISOString()) : '이 기기에서 아직 백업 파일을 받은 적이 없어요';
+      const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (e) { console.error(e); toast('실패: ' + (e.message || e)); } finally { btn.disabled = false; } };
+      $('#s_bk_json', ov).onclick = e => busy(e.currentTarget, backupJson);
+      $('#s_bk_csv', ov).onclick = e => busy(e.currentTarget, backupCsv);
+      $('#s_trash', ov).onclick = e => busy(e.currentTarget, openTrash);
+      $('#s_bk_restore', ov).onclick = () => $('#s_bk_file', ov).click();
+      $('#s_bk_file', ov).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) busy($('#s_bk_restore', ov), () => restoreBackup(f)); };
     },
     buttons: [
       { label: '로그아웃', cls: 'danger left', run: async () => { await sb.auth.signOut(); showLogin(); } },
@@ -671,6 +830,83 @@ async function openSettings() {
         await reload(); toast('저장했어요');
       } },
     ],
+  });
+}
+
+/* ---------- 백업·복원 (대표) ---------- */
+async function fetchAll() {
+  const [e, c, l, st] = await Promise.all([
+    sb.from('cal_events').select('*').order('day').order('created_at'),
+    sb.from('cal_categories').select('*').order('sort'),
+    sb.from('cal_links').select('id, name, kind, weekdays, dates, active, expires_on, created_at'),
+    sb.from('cal_settings').select('company').maybeSingle(),
+  ]);
+  const err = e.error || c.error || l.error || st.error; if (err) throw err;
+  return { company: st.data?.company || '', categories: c.data, events: e.data, links: l.data };
+}
+function saveFile(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
+async function backupJson() {
+  const d = await fetchAll();
+  saveFile(`팀캘린더-백업-${ymd(new Date())}.json`, JSON.stringify({ app: 'team-calendar', version: 1, exported_at: new Date().toISOString(), ...d }, null, 1), 'application/json');
+  lsSet('tc.lastBackup', String(Date.now()));
+  toast(`백업 파일을 받았어요 (일정 ${d.events.length}개) — 다운로드 폴더를 확인하세요`);
+}
+async function backupCsv() {
+  const d = await fetchAll(), cat = Object.fromEntries(d.categories.map(c => [c.id, c.name]));
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const lines = [['날짜', '요일', '분류', '일정', '메모', '완료', '완료한 사람', '완료 시각'].map(q).join(',')]
+    .concat(d.events.map(e => [e.day, WD[parse(e.day).getDay()], cat[e.category_id] || '', e.title, e.memo, e.done ? 'O' : '', e.done_by, e.done_at ? fmtWhen(e.done_at) : ''].map(q).join(',')));
+  saveFile(`팀캘린더-${ymd(new Date())}.csv`, '\ufeff' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+  toast(`엑셀용 파일을 받았어요 (일정 ${d.events.length}개)`);
+}
+async function restoreBackup(file) {
+  let d;
+  try { d = JSON.parse(await file.text()); } catch { throw new Error('백업 파일(.json)이 아니에요'); }
+  if (d?.app !== 'team-calendar' || !Array.isArray(d.events)) throw new Error('팀 캘린더 백업 파일이 아니에요');
+  if (!(await confirmBox('백업 파일로 복원할까요?', `${(d.exported_at || '').slice(0, 10)} 백업 · 일정 ${d.events.length}개, 분류 ${(d.categories || []).length}개\n지금 있는 일정은 지워지지 않고, 백업에 있는 일정이 되살아나거나 백업 때 내용으로 돌아가요.`, '복원하기', '취소'))) return;
+  const me = S.user.id, chunk = (a, n = 300) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+  const cats = (d.categories || []).map(({ id, name, color, sort }) => ({ id, name, color, sort, owner: me }));
+  for (const part of chunk(cats)) { const { error } = await sb.from('cal_categories').upsert(part); if (error) throw error; }
+  const catIds = new Set([...cats.map(c => c.id), ...S.cats.map(c => c.id)]);
+  const evs = d.events.map(({ id, title, memo, day, color, category_id, done, done_by, done_at, created_at }) =>
+    ({ id, title, memo: memo || '', day, color, category_id: catIds.has(category_id) ? category_id : null, done: !!done, done_by, done_at, created_at, owner: me }));
+  for (const part of chunk(evs)) { const { error } = await sb.from('cal_events').upsert(part); if (error) throw error; }
+  if (d.company && !S.company) await sb.from('cal_settings').upsert({ owner: me, company: d.company });
+  await reload(); toast(`복원했어요 (일정 ${evs.length}개)`);
+}
+async function openTrash() {
+  const since = new Date(Date.now() - 90 * 864e5).toISOString();
+  const { data, error } = await sb.from('cal_history').select('id, row_id, data, at')
+    .eq('tbl', 'cal_events').eq('op', 'DELETE').gte('at', since).order('at', { ascending: false }).limit(200);
+  if (error) throw error;
+  const ids = [...new Set(data.map(h => h.row_id))];
+  const { data: alive } = ids.length ? await sb.from('cal_events').select('id').in('id', ids) : { data: [] };
+  const aliveSet = new Set((alive || []).map(x => x.id)), seen = new Set();
+  const items = data.filter(h => !aliveSet.has(h.row_id) && !seen.has(h.row_id) && seen.add(h.row_id));
+  await modal({
+    title: '삭제한 일정 복구',
+    text: '최근 90일 안에 삭제한 일정이에요. [복구]를 누르면 원래 날짜로 돌아가요.',
+    html: `<div class="trash">${items.map(h => `<div class="trow" style="--c:${catById(h.data.category_id)?.color || h.data.color || '#94a3b8'}">
+        <i class="dot"></i><span class="t"><b>${md(h.data.day)}</b> ${esc(h.data.title)}</span>
+        <button type="button" class="btn sm primary" data-restore="${h.id}">복구</button></div>`).join('') || '<div class="empty">삭제한 일정이 없어요</div>'}</div>`,
+    buttons: [{ label: '닫기', cls: 'primary' }],
+    onMount: ov => {
+      $('.trash', ov).onclick = async e => {
+        const b = e.target.closest('[data-restore]'); if (!b) return;
+        const h = items.find(x => String(x.id) === b.dataset.restore); if (!h) return;
+        b.disabled = true;
+        const row = { ...h.data };
+        if (row.category_id && !catById(row.category_id)) row.category_id = null;
+        const { error } = await sb.from('cal_events').insert(row);
+        if (error) { b.disabled = false; return toast('복구 실패: ' + error.message); }
+        b.closest('.trow').remove(); await reload(); toast(`${md(row.day)} “${row.title}” 일정을 복구했어요`);
+      };
+    },
   });
 }
 
@@ -781,6 +1017,8 @@ function bindUI() {
   $('#btnSettings').onclick = openSettings;
   $('#btnName').onclick = () => askName(false);
   $('#btnOwnerLogin').onclick = showLogin;
+  $('#forgotPw').onclick = forgotPassword;
+  $('#forgotId').onclick = forgotEmail;
   sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT' && S.mode === 'owner') showLogin(); });
 }
 

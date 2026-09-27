@@ -298,3 +298,27 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .grid.slide-r { animation: slideR .22s ease-out; }
 @keyframes slideL { from { transform: translateX(28px); opacity: .3; } }
 @keyframes slideR { from { transform: translateX(-28px); opacity: .3; } }
+
+/* ---- 로그인 찾기 링크 ---- */
+.login-links { display: flex; justify-content: center; gap: 4px 14px; flex-wrap: wrap; margin-top: 10px; }
+/* ---- PIN 입력 ---- */
+.notice form { margin-top: 12px; }
+.pin { width: 100%; font-size: 26px; letter-spacing: 8px; text-align: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+/* ---- 링크 보안 ---- */
+.secbox { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.sectitle { font-weight: 700; font-size: 14px; margin: 14px 0 6px; }
+.secbox .sectitle { margin-top: 0; }
+.switch { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 14px; }
+.switch input { width: 20px; height: 20px; margin: 0; flex: none; }
+.switch small { color: var(--muted); }
+.gbadges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.bdg { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--soft); }
+.bdg.off { background: #fee2e2; color: #b91c1c; }
+.bdg.muted { color: var(--muted); background: transparent; border: 1px solid var(--line); }
+/* ---- 백업 ---- */
+.setgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0 4px; }
+.setgrid .btn { font-size: 14px; padding: 8px 6px; white-space: normal; }
+.trash { display: flex; flex-direction: column; gap: 6px; max-height: 55vh; overflow: auto; }
+.trow { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 10px; padding: 6px 8px; }
+.trow .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.trow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
