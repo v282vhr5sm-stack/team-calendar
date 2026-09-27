@@ -239,7 +239,7 @@ drop trigger if exists cal_categories_notify on public.cal_categories;
 create trigger cal_categories_notify after insert or update or delete on public.cal_categories
   for each row execute function public.cal_events_notify();
 
--- 5) 자동 백업: 수정·삭제되기 직전 내용을 기록 (삭제한 일정 복구에 사용, 180일 보관) --------
+-- 5) 안전망: 수정·삭제되기 직전 내용을 기록 (화면에는 안 보임, 실수로 지운 일정을 관리자가 되살릴 때 사용) --------
 create table if not exists public.cal_history (
   id bigserial primary key,
   owner uuid not null,
@@ -261,7 +261,6 @@ returns trigger language plpgsql security definer set search_path = public as $$
 begin
   insert into public.cal_history (owner, tbl, op, row_id, data)
   values (old.owner, tg_table_name, tg_op, old.id, to_jsonb(old) - 'pin_hash');
-  if random() < 0.02 then delete from public.cal_history where owner = old.owner and at < now() - interval '180 days'; end if;
   return null;
 end $$;
 drop trigger if exists cal_events_history on public.cal_events;

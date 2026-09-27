@@ -82,7 +82,8 @@ window.addEventListener('popstate', () => {
   if (Date.now() - lastBack < 2000) { history.back(); return; }
   lastBack = Date.now(); toast('뒤로 버튼을 한 번 더 누르면 닫혀요'); armBack();
 });
-document.addEventListener('pointerdown', armBack, true);
+// 폰은 손가락을 뗄 때(탭)만 '사용자 동작'으로 인정됨 → 그때 기록을 깔아야 뒤로가기에서 무시되지 않음
+['pointerup', 'touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, armBack, true));
 
 /* ---------- 모달 ---------- */
 function modal({ title, text = '', html = '', buttons = [], onMount }) {
@@ -98,6 +99,7 @@ function modal({ title, text = '', html = '', buttons = [], onMount }) {
       resolve(v);
     };
     modalStack.push(close);
+    armBack();
     const onKey = e => { if (e.key === 'Escape' && ov === document.querySelector('.ov:last-of-type')) close(undefined); };
     for (const b of buttons) {
       const el = document.createElement('button');
@@ -269,7 +271,7 @@ async function startOwner(user) {
   const lastBk = +lsGet('tc.lastBackup') || 0, nag = lsGet('tc.backupNag');
   if (S.events.length && Date.now() - lastBk > 14 * 864e5 && nag !== ymd(new Date())) {
     lsSet('tc.backupNag', ymd(new Date()));
-    setTimeout(() => toast('💾 백업 파일을 받아둔 지 2주가 넘었어요 — ⚙️ 설정에서 받을 수 있어요'), 2500);
+    setTimeout(() => toast('💾 백업한 지 2주가 넘었어요 — 컴퓨터에서 ⚙️ 설정 → 내 컴퓨터에 백업하기'), 2500);
   }
   if (!S.catsInit) {
     if (!S.cats.length) await sb.from('cal_categories').insert(DEFAULT_CATS.map(([name, color], i) => ({ name, color, sort: i })));
@@ -797,14 +799,10 @@ async function openSettings() {
       <div class="catlegend" id="s_cats"></div>
       <button type="button" class="btn wide" id="s_cats_btn" style="margin:8px 0 12px">🎨 분류 관리 (추가·수정·삭제)</button>
       <div class="sectitle">💾 백업</div>
-      <p class="fieldlabel">일정을 고치거나 지우면 서버에 자동으로 기록돼요(180일). 서버 밖에도 사본을 두려면 가끔 백업 파일을 받아두세요.</p>
-      <div class="setgrid">
-        <button type="button" class="btn" id="s_bk_json">📥 백업 파일 받기</button>
-        <button type="button" class="btn" id="s_bk_csv">📊 엑셀용 받기</button>
-        <button type="button" class="btn" id="s_trash">🗑 삭제한 일정 복구</button>
-        <button type="button" class="btn" id="s_bk_restore">📂 백업 파일로 복원</button>
-      </div>
-      <p class="fieldlabel" id="s_bk_last"></p>
+      <p class="fieldlabel">일정은 지우기 전까지 사이트에 계속 남아 있어요. 혹시 모를 때를 위해 가끔 대표님 컴퓨터에 백업해 두세요.</p>
+      <button type="button" class="btn primary wide" id="s_bk_json">💾 내 컴퓨터에 백업하기</button>
+      <p class="fieldlabel" id="s_bk_last" style="margin-top:6px"></p>
+      <div class="bk-more"><button type="button" class="linkbtn" id="s_bk_csv">엑셀 파일로도 받기</button><button type="button" class="linkbtn" id="s_bk_restore">백업 파일로 되돌리기</button></div>
       <input type="file" id="s_bk_file" accept=".json,application/json" hidden>
       <p class="fieldlabel">로그인: ${esc(S.user?.email)} · 이 기기에서 자동 로그인 유지</p>`,
     onMount: ov => {
@@ -812,11 +810,10 @@ async function openSettings() {
       draw();
       $('#s_cats_btn', ov).onclick = async () => { await openCategories(); draw(); };
       const last = +lsGet('tc.lastBackup') || 0;
-      $('#s_bk_last', ov).textContent = last ? '이 기기에서 마지막 백업: ' + fmtWhen(new Date(last).toISOString()) : '이 기기에서 아직 백업 파일을 받은 적이 없어요';
+      $('#s_bk_last', ov).textContent = last ? '마지막 백업: ' + fmtWhen(new Date(last).toISOString()) : '아직 백업한 적이 없어요';
       const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (e) { console.error(e); toast('실패: ' + (e.message || e)); } finally { btn.disabled = false; } };
       $('#s_bk_json', ov).onclick = e => busy(e.currentTarget, backupJson);
       $('#s_bk_csv', ov).onclick = e => busy(e.currentTarget, backupCsv);
-      $('#s_trash', ov).onclick = e => busy(e.currentTarget, openTrash);
       $('#s_bk_restore', ov).onclick = () => $('#s_bk_file', ov).click();
       $('#s_bk_file', ov).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) busy($('#s_bk_restore', ov), () => restoreBackup(f)); };
     },
@@ -854,7 +851,7 @@ async function backupJson() {
   const d = await fetchAll();
   saveFile(`팀캘린더-백업-${ymd(new Date())}.json`, JSON.stringify({ app: 'team-calendar', version: 1, exported_at: new Date().toISOString(), ...d }, null, 1), 'application/json');
   lsSet('tc.lastBackup', String(Date.now()));
-  toast(`백업 파일을 받았어요 (일정 ${d.events.length}개) — 다운로드 폴더를 확인하세요`);
+  toast(`컴퓨터에 백업했어요 (일정 ${d.events.length}개) — 다운로드 폴더에 저장됐어요`);
 }
 async function backupCsv() {
   const d = await fetchAll(), cat = Object.fromEntries(d.categories.map(c => [c.id, c.name]));
@@ -879,37 +876,6 @@ async function restoreBackup(file) {
   if (d.company && !S.company) await sb.from('cal_settings').upsert({ owner: me, company: d.company });
   await reload(); toast(`복원했어요 (일정 ${evs.length}개)`);
 }
-async function openTrash() {
-  const since = new Date(Date.now() - 90 * 864e5).toISOString();
-  const { data, error } = await sb.from('cal_history').select('id, row_id, data, at')
-    .eq('tbl', 'cal_events').eq('op', 'DELETE').gte('at', since).order('at', { ascending: false }).limit(200);
-  if (error) throw error;
-  const ids = [...new Set(data.map(h => h.row_id))];
-  const { data: alive } = ids.length ? await sb.from('cal_events').select('id').in('id', ids) : { data: [] };
-  const aliveSet = new Set((alive || []).map(x => x.id)), seen = new Set();
-  const items = data.filter(h => !aliveSet.has(h.row_id) && !seen.has(h.row_id) && seen.add(h.row_id));
-  await modal({
-    title: '삭제한 일정 복구',
-    text: '최근 90일 안에 삭제한 일정이에요. [복구]를 누르면 원래 날짜로 돌아가요.',
-    html: `<div class="trash">${items.map(h => `<div class="trow" style="--c:${catById(h.data.category_id)?.color || h.data.color || '#94a3b8'}">
-        <i class="dot"></i><span class="t"><b>${md(h.data.day)}</b> ${esc(h.data.title)}</span>
-        <button type="button" class="btn sm primary" data-restore="${h.id}">복구</button></div>`).join('') || '<div class="empty">삭제한 일정이 없어요</div>'}</div>`,
-    buttons: [{ label: '닫기', cls: 'primary' }],
-    onMount: ov => {
-      $('.trash', ov).onclick = async e => {
-        const b = e.target.closest('[data-restore]'); if (!b) return;
-        const h = items.find(x => String(x.id) === b.dataset.restore); if (!h) return;
-        b.disabled = true;
-        const row = { ...h.data };
-        if (row.category_id && !catById(row.category_id)) row.category_id = null;
-        const { error } = await sb.from('cal_events').insert(row);
-        if (error) { b.disabled = false; return toast('복구 실패: ' + error.message); }
-        b.closest('.trow').remove(); await reload(); toast(`${md(row.day)} “${row.title}” 일정을 복구했어요`);
-      };
-    },
-  });
-}
-
 /* ---------- 분류(색깔) 관리 (대표) ---------- */
 function legendHtml() { return S.cats.map(c => `<span class="lg" style="--c:${c.color}"><i></i>${esc(c.name)}</span>`).join(''); }
 
