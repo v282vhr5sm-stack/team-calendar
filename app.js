@@ -771,7 +771,21 @@ function bindUI() {
   sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT' && S.mode === 'owner') showLogin(); });
 }
 
+// 새 버전이 올라오면 폰에서도 바로 바뀌도록: 앱을 열거나 돌아올 때·1분마다 확인 → 바뀌면 자동 새로고침
 if ('serviceWorker' in navigator && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    const check = () => reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+    setInterval(check, 60000);
+  }).catch(() => {});
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;   // 처음 설치 때는 새로고침 안 함
+    reloading = true;
+    // 입력 중인 창이 열려 있으면 닫힌 뒤에 새로고침
+    const go = () => (document.querySelector('.ov') ? setTimeout(go, 1500) : location.reload());
+    go();
+  });
 }
 boot();
