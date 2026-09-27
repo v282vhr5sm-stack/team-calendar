@@ -850,6 +850,7 @@ async function openSettings() {
       <input type="file" id="s_bk_file" accept=".json,application/json" hidden>
       <div class="sectitle">🔑 비밀번호 찾기용 확인번호</div>
       <div class="recrow"><span id="s_rec_state"></span><button type="button" class="btn sm" id="s_rec_btn"></button></div>
+      <a class="btn wide helpbtn" href="help.html">📘 관리 안내서 (문제가 생겼을 때 · Claude 없이 관리하기)</a>
       <p class="fieldlabel">로그인: ${esc(S.user?.email)} · 이 기기에서 자동 로그인 유지</p>`,
     onMount: ov => {
       const draw = () => { $('#s_cats', ov).innerHTML = legendHtml() || '<span class="fieldlabel">분류가 없어요</span>'; };

@@ -1,0 +1,37 @@
+# Supabase 무료 서버는 7일 동안 사용이 없으면 멈춤 → 3일마다 한 번 가볍게 깨워줌 (Claude 없이 GitHub가 자동 실행)
+# GitHub는 60일 동안 저장소 변화가 없으면 이 자동 작업을 끄기 때문에, 매달 1일에 기록 파일을 한 줄 갱신함
+name: keep-alive
+
+on:
+  schedule:
+    - cron: "17 3 */3 * *"   # 3일마다 (한국 시간 낮 12시 17분쯤)
+  workflow_dispatch: {}       # Actions 화면에서 직접 실행도 가능
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Supabase 깨우기
+        run: |
+          URL=$(curl -s https://v282vhr5sm-stack.github.io/team-calendar/config.js | grep SUPABASE_URL | sed -E "s/.*'(https[^']+)'.*/\1/")
+          KEY=$(curl -s https://v282vhr5sm-stack.github.io/team-calendar/config.js | grep SUPABASE_KEY | sed -E "s/.*'([^']+)'.*/\1/")
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$URL/rest/v1/rpc/cal_view" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+            -d '{"p_token":"keepalive","p_from":"2026-01-01","p_to":"2026-01-02"}')
+          echo "Supabase 응답: $code"
+          test "$code" = "200"
+
+      - uses: actions/checkout@v4
+      - name: 매달 1회 저장소 기록 갱신 (자동 작업이 꺼지지 않게)
+        run: |
+          if [ "$(date -u +%d)" = "01" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            date -u +"%Y-%m-%d %H:%M UTC" > .keepalive
+            git config user.name "keepalive-bot"
+            git config user.email "keepalive-bot@users.noreply.github.com"
+            git add .keepalive
+            git commit -m "keepalive $(date -u +%Y-%m)" || echo "변경 없음"
+            git push || echo "push 실패(무시)"
+          fi

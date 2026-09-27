@@ -1,14 +1,19 @@
 # 팀 캘린더
 
-대표가 일정을 만들고, 직원(정규직/주말 알바 등 그룹별)에게 링크로 공유. 직원은 보기 + 완료 체크만 가능. Supabase Realtime으로 모든 기기에 즉시 반영.
+대표가 일정을 만들고, 직원에게 링크로 공유(전체 / 요일별 / 날짜 선택). 직원은 보기 + 완료 체크만 가능. 모든 기기에 실시간 반영.
 
-## 처음 한 번
-1. Supabase 대시보드 > SQL Editor 에 `supabase.sql` 전체 붙여넣고 Run
-2. Authentication > Sign In / Providers > "Allow new users to sign up" 켜기 (대표가 사이트에서 계정 만들 때 필요)
-   - 메일 인증 없이 바로 쓰려면 같은 화면의 "Confirm email" 끄기
-3. GitHub 저장소에 이 폴더를 올리고 Settings > Pages 에서 main / root 로 배포
+- 사이트: https://v282vhr5sm-stack.github.io/team-calendar/  (GitHub Pages, 이 저장소 main 브랜치 루트)
+- 데이터: Supabase 프로젝트 `team-calendar` (조직 "공유캘린더", 서울). 연결 정보는 `config.js` (공개용 publishable 키만)
+- 사용·관리 안내: 사이트의 `help.html` (설정 화면 → 관리 안내서)
 
-## 수정 시
-파일 수정 후 `sw.js` 의 VERSION 을 올리고 push.
+## 구조
+- `index.html`, `styles.css`, `app.js` — 화면 전부 (빌드 없음, 순수 HTML/JS, supabase-js CDN)
+- `supabase.sql` — 표·권한·함수 전체. SQL Editor에 통째로 다시 실행해도 안전
+- `sw.js` — 오프라인·자동 업데이트. 파일 수정 후 `node bump.cjs`로 버전 올리기
+- `.github/workflows/keepalive.yml` — 3일마다 Supabase 깨우기(무료 서버 멈춤 방지), 매달 `.keepalive` 갱신
+
+## 수정·배포
+1. 파일 수정 → `node bump.cjs` → commit → `git pull --rebase` (자동 작업이 커밋을 남기므로) → `git push`
+2. 1~2분 뒤 사이트 반영, 폰은 다시 열면 자동 새로고침
 
 로컬 확인: `node .serve.cjs` → http://localhost:5179
