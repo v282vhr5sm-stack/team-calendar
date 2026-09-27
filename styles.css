@@ -119,7 +119,7 @@ label input, label textarea, label select {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 @media (min-width: 700px) { .chip { font-size: 12px; } }
-.chip.done { text-decoration: line-through; opacity: .45; }
+.chip.done { box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.7); }
 .more { font-size: 10px; color: var(--muted); padding-left: 4px; }
 
 /* 하루 목록 */
@@ -131,7 +131,7 @@ label input, label textarea, label select {
 .empty { color: var(--muted); text-align: center; padding: 24px 8px; font-size: 14px; }
 .ev { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 12px; padding: 12px; background: var(--card); }
 .ev.done { background: color-mix(in srgb, var(--ok-soft) 60%, var(--card)); }
-.ev.done .t { text-decoration: line-through; color: var(--muted); }
+
 .check {
   flex: none; width: 34px; height: 34px; border-radius: 10px; border: 2px solid var(--line); background: var(--card);
   display: grid; place-items: center; font-size: 18px; font-weight: 800; color: transparent; transition: .15s;

@@ -156,6 +156,9 @@ async function onLogin(e) {
 /* ---------- 대표 모드 ---------- */
 async function startOwner(user) {
   S.mode = 'owner'; S.user = user; S.token = null; S.link = null;
+  // 브라우저가 저장 공간(로그인 정보)을 임의로 비우지 않도록 요청 → 비밀번호 저장(삼성패스 등) 없이도 로그인 유지
+  try { navigator.storage?.persist?.(); } catch {}
+  lsSet('tc.owner', '1');
   document.body.className = 'owner';
   show('main');
   $('#brandTitle').textContent = '팀 캘린더';
@@ -324,7 +327,7 @@ function renderCal() {
     html += `<button class="${cls}" data-day="${k}" aria-label="${d.getMonth() + 1}월 ${d.getDate()}일 일정 ${evs.length}개">
       <span class="num">${d.getDate()}</span>
       ${evs.length ? `<span class="cnt ${done === evs.length ? 'all' : ''}">${done}/${evs.length}</span>` : ''}
-      <span class="chips">${evs.slice(0, 3).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${esc(e.title)}</span>`).join('')}
+      <span class="chips">${evs.slice(0, 3).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${e.done ? '✓ ' : ''}${esc(e.title)}</span>`).join('')}
       ${evs.length > 3 ? `<span class="more">+${evs.length - 3}</span>` : ''}</span></button>`;
   }
   $('#grid').innerHTML = html;
