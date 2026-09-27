@@ -323,3 +323,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .trow .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
 .trow .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
 .bk-more { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+
+.recrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 10px; font-size: 14px; }
+.recrow .ok { color: var(--ok); } .recrow .warn { color: var(--danger); }

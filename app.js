@@ -76,11 +76,17 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.ad
 // 뒤로 갈 기록이 없으면 앱 안 브라우저(네이버·카톡 등)가 통째로 닫힘 → 기록 한 칸을 깔아두고 가로챔
 const modalStack = [];
 let lastBack = 0;
-function armBack() { if (!(history.state && history.state.tcGuard)) history.pushState({ tcGuard: 1 }, ''); }
+// 주의: 기록은 반드시 사용자가 탭한 순간에만 깔아야 함. 자동으로(뒤로가기 처리 중에) 깔면
+// 크롬이 그 아래 기록을 '건너뛸 기록'으로 표시해서 다음 뒤로가기 때 사이트가 통째로 닫힘
+function armBack() {
+  if (history.state && history.state.tcGuard) return;
+  if (navigator.userActivation && !navigator.userActivation.isActive) return;   // 사용자 동작 중이 아니면 깔지 않음
+  history.pushState({ tcGuard: 1 }, '');
+}
 window.addEventListener('popstate', () => {
-  if (modalStack.length) { modalStack[modalStack.length - 1](undefined); armBack(); return; }
-  if (Date.now() - lastBack < 2000) { history.back(); return; }
-  lastBack = Date.now(); toast('뒤로 버튼을 한 번 더 누르면 닫혀요'); armBack();
+  // 여기서는 pushState 하지 않음 (다음 탭 때 다시 깔림)
+  if (modalStack.length) { modalStack[modalStack.length - 1](undefined); return; }
+  lastBack = Date.now(); toast('뒤로 버튼을 한 번 더 누르면 닫혀요');
 });
 // 폰은 손가락을 뗄 때(탭)만 '사용자 동작'으로 인정됨 → 그때 기록을 깔아야 뒤로가기에서 무시되지 않음
 ['pointerup', 'touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, armBack, true));
@@ -157,21 +163,55 @@ function showLogin() {
 async function forgotPassword() {
   await modal({
     title: '비밀번호 찾기',
-    text: '가입한 이메일로 비밀번호 재설정 링크를 보내드려요. 메일의 링크를 누르면 새 비밀번호를 정할 수 있어요.',
-    html: `<label>가입한 이메일<input id="fp_email" type="email" autocomplete="email" value="${esc($('#loginForm').email.value || lsGet('tc.lastEmail') || '')}"></label>`,
-    buttons: [{ label: '취소' }, { label: '재설정 메일 보내기', cls: 'primary', run: async ov => {
-      const email = $('#fp_email', ov).value.trim();
-      if (!/^\S+@\S+\.\S+$/.test(email)) { toast('이메일을 확인하세요'); return false; }
-      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
-      if (error) {
-        const m = error.message || '';
-        toast(/rate|seconds|too many/i.test(m) ? '너무 자주 보냈어요. 잠시 후 다시 시도하세요'
-          : /not authorized|smtp|sending/i.test(m) ? '메일 발송 설정이 아직 안 돼 있어요. 관리자에게 문의하세요' : '보내지 못했어요: ' + m);
-        return false;
-      }
+    text: '설정에서 정해둔 "비밀번호 찾기용 확인번호"를 입력하면 새 비밀번호로 바꿀 수 있어요.',
+    html: `<label>가입한 이메일<input id="fp_email" type="email" autocomplete="email" value="${esc($('#loginForm').email.value || lsGet('tc.lastEmail') || '')}"></label>
+      <label>확인번호<input id="fp_code" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off"></label>
+      <label>새 비밀번호 (6자 이상)<input id="fp_new1" type="password" autocomplete="new-password"></label>
+      <label>새 비밀번호 한 번 더<input id="fp_new2" type="password" autocomplete="new-password"></label>
+      <p class="msg" id="fp_msg"></p>`,
+    buttons: [{ label: '취소' }, { label: '비밀번호 바꾸기', cls: 'primary', run: async ov => {
+      const email = $('#fp_email', ov).value.trim(), code = $('#fp_code', ov).value.trim();
+      const a = $('#fp_new1', ov).value, b = $('#fp_new2', ov).value, msg = $('#fp_msg', ov);
+      const say = t => { msg.textContent = t; return false; };
+      if (!/^\S+@\S+\.\S+$/.test(email)) return say('이메일을 확인하세요');
+      if (!code) return say('확인번호를 입력하세요');
+      if (a.length < 6) return say('새 비밀번호는 6자 이상으로 정하세요');
+      if (a !== b) return say('새 비밀번호 두 개가 달라요');
+      const { data, error } = await sb.rpc('cal_reset_password', { p_email: email, p_code: code, p_new: a });
+      if (error) return say('바꾸지 못했어요: ' + error.message);
+      if (data?.error) return say({
+        bad: '이메일 또는 확인번호가 맞지 않아요',
+        nocode: '이 계정은 확인번호를 정해두지 않았어요. 관리자에게 문의하세요',
+        locked: '여러 번 틀려서 30분 동안 잠겼어요. 잠시 후 다시 해주세요',
+        short: '새 비밀번호는 6자 이상으로 정하세요',
+      }[data.error] || '바꾸지 못했어요');
+      // 바뀐 비밀번호로 바로 로그인
+      const { data: li, error: le } = await sb.auth.signInWithPassword({ email, password: a });
       lsSet('tc.lastEmail', email);
-      modal({ title: '메일을 보냈어요', text: `${email} 메일함을 확인하세요. (안 보이면 스팸함도 확인)\n메일의 링크는 크롬에서 열어주세요.`, buttons: [{ label: '확인', cls: 'primary' }] });
+      if (le) { toast('비밀번호를 바꿨어요. 새 비밀번호로 로그인하세요'); return; }
+      toast('비밀번호를 바꾸고 로그인했어요');
+      startOwner(li.user);
     } }],
+  });
+}
+
+// 비밀번호 찾기용 확인번호 정하기/바꾸기 (대표, 로그인 상태)
+async function setRecoveryCode() {
+  return modal({
+    title: '비밀번호 찾기용 확인번호',
+    text: '비밀번호를 잊었을 때 이 번호로 새 비밀번호를 정할 수 있어요. 대표님만 아는 숫자로 정하고 잘 기억해 두세요. (5번 틀리면 30분 잠김)',
+    html: `<label>확인번호 (숫자 4~12자리)<input id="rc1" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off"></label>
+      <label>한 번 더<input id="rc2" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="12" autocomplete="off"></label>
+      <p class="msg" id="rc_msg"></p>`,
+    buttons: [{ label: '나중에', value: false }, { label: '저장', cls: 'primary', value: true, run: async ov => {
+      const a = $('#rc1', ov).value.trim(), b = $('#rc2', ov).value.trim(), msg = $('#rc_msg', ov);
+      if (!/^[0-9]{4,12}$/.test(a)) { msg.textContent = '숫자 4~12자리로 정하세요'; return false; }
+      if (a !== b) { msg.textContent = '두 번호가 달라요'; return false; }
+      const { error } = await sb.rpc('cal_set_recovery_code', { p_code: a });
+      if (error) { msg.textContent = '저장 실패: ' + error.message; return false; }
+      S.hasRecovery = true; toast('확인번호를 저장했어요');
+    } }],
+    onMount: ov => $('#rc1', ov).focus(),
   });
 }
 
@@ -279,6 +319,10 @@ async function startOwner(user) {
     await reload();
   }
   subscribe('cal-owner-' + user.id);
+  if (!S.hasRecovery && lsGet('tc.recNag') !== ymd(new Date())) {
+    lsSet('tc.recNag', ymd(new Date()));
+    setTimeout(() => { if (!document.querySelector('.ov')) setRecoveryCode(); }, 1200);
+  }
 }
 
 async function loadOwner() {
@@ -287,12 +331,12 @@ async function loadOwner() {
     sb.from('cal_links').select('*').order('created_at'),
     sb.from('cal_events').select('*').gte('day', ymd(a)).lte('day', ymd(b))
       .order('day').order('start_time', { nullsFirst: true }).order('created_at'),
-    sb.from('cal_settings').select('company, cats_init').maybeSingle(),
+    sb.from('cal_settings').select('company, cats_init, recovery_hash').maybeSingle(),
     sb.from('cal_categories').select('*').order('sort').order('created_at'),
   ]);
   const err = l.error || e.error || s.error || c.error;
   if (err) throw err;
-  return { links: l.data, events: e.data, company: s.data?.company || '', catsInit: !!s.data?.cats_init, cats: c.data };
+  return { links: l.data, events: e.data, company: s.data?.company || '', catsInit: !!s.data?.cats_init, hasRecovery: !!s.data?.recovery_hash, cats: c.data };
 }
 
 /* ---------- 직원 모드 ---------- */
@@ -363,7 +407,7 @@ async function reload() {
     if (S.mode === 'owner') {
       const r = await loadOwner();
       if (id !== S.reqId) return true;
-      S.links = r.links; S.events = r.events; S.company = r.company; S.cats = r.cats; S.catsInit = r.catsInit;
+      S.links = r.links; S.events = r.events; S.company = r.company; S.cats = r.cats; S.catsInit = r.catsInit; S.hasRecovery = r.hasRecovery;
       $('#brandTitle').textContent = S.company || '팀 캘린더';
       if (S.filter !== 'all' && !S.links.some(l => l.id === S.filter)) S.filter = 'all';
     } else if (S.mode === 'member') {
@@ -804,11 +848,19 @@ async function openSettings() {
       <p class="fieldlabel" id="s_bk_last" style="margin-top:6px"></p>
       <div class="bk-more"><button type="button" class="linkbtn" id="s_bk_csv">엑셀 파일로도 받기</button><button type="button" class="linkbtn" id="s_bk_restore">백업 파일로 되돌리기</button></div>
       <input type="file" id="s_bk_file" accept=".json,application/json" hidden>
+      <div class="sectitle">🔑 비밀번호 찾기용 확인번호</div>
+      <div class="recrow"><span id="s_rec_state"></span><button type="button" class="btn sm" id="s_rec_btn"></button></div>
       <p class="fieldlabel">로그인: ${esc(S.user?.email)} · 이 기기에서 자동 로그인 유지</p>`,
     onMount: ov => {
       const draw = () => { $('#s_cats', ov).innerHTML = legendHtml() || '<span class="fieldlabel">분류가 없어요</span>'; };
       draw();
       $('#s_cats_btn', ov).onclick = async () => { await openCategories(); draw(); };
+      const drawRec = () => {
+        $('#s_rec_state', ov).innerHTML = S.hasRecovery ? '<b class="ok">✓ 설정됨</b>' : '<b class="warn">아직 없음 — 꼭 정해두세요</b>';
+        $('#s_rec_btn', ov).textContent = S.hasRecovery ? '바꾸기' : '정하기';
+      };
+      drawRec();
+      $('#s_rec_btn', ov).onclick = async () => { await setRecoveryCode(); drawRec(); };
       const last = +lsGet('tc.lastBackup') || 0;
       $('#s_bk_last', ov).textContent = last ? '마지막 백업: ' + fmtWhen(new Date(last).toISOString()) : '아직 백업한 적이 없어요';
       const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (e) { console.error(e); toast('실패: ' + (e.message || e)); } finally { btn.disabled = false; } };
