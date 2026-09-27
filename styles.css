@@ -287,3 +287,7 @@ html, body { max-width: 100%; overflow-x: hidden; }
 }
 .star { width: 1.6em; height: 1.6em; vertical-align: -0.45em; margin-right: 2px; flex: none; }
 .chip.done { box-shadow: none; }
+/* 달력 칸 제목: 폰에서도 한 줄, 넘치는 부분은 잘라냄 */
+@media (max-width: 699px) {
+  .chip { display: block; white-space: nowrap; word-break: normal; overflow: hidden; text-overflow: clip; -webkit-line-clamp: unset; line-clamp: none; }
+}

@@ -406,17 +406,17 @@ async function editEvent(id) {
   const catButtons = () => S.cats.map(c => `<button type="button" style="--c:${c.color}" data-cat="${c.id}" class="${c.id === catId ? 'on' : ''}"><i></i>${esc(c.name)}</button>`).join('');
   const html = `
     <label>일정 제목<input id="f_title" maxlength="100" required value="${esc(e?.title)}" placeholder="예: 매장 오픈 준비"></label>
-    <label>날짜<input id="f_day" type="date" required value="${e?.day || S.sel}"></label>
+    ${e ? `<label>날짜<input id="f_day" type="date" required value="${e.day}"></label>` : ""}
     <label>메모 (선택)<textarea id="f_memo" rows="3" maxlength="1000" placeholder="준비물, 장소 등">${esc(e?.memo)}</textarea></label>
     <div class="fieldlabel">분류 (색깔) <button type="button" class="linkbtn" id="f_cats_edit">분류 관리</button></div>
     <div class="catpick" id="f_cats">${catButtons() || '<span class="fieldlabel">분류 관리에서 분류를 먼저 만드세요.</span>'}</div>
     <p class="fieldlabel" id="f_share"></p>`;
   const showShare = ov => {
-    const day = $('#f_day', ov).value, ls = day ? S.links.filter(l => linkMatch(l, day)) : [];
+    const day = e ? $('#f_day', ov).value : S.sel, ls = day ? S.links.filter(l => linkMatch(l, day)) : [];
     $('#f_share', ov).textContent = !day ? '' : ls.length ? `이 날짜 일정이 보이는 링크: ${ls.map(l => l.name).join(', ')}` : '이 날짜는 어떤 공유 링크에도 포함되지 않아요 (대표만 보임)';
   };
   const save = async ov => {
-    const title = $('#f_title', ov).value.trim(), day = $('#f_day', ov).value;
+    const title = $('#f_title', ov).value.trim(), day = e ? $('#f_day', ov).value : S.sel;
     if (!title) { $('#f_title', ov).focus(); toast('제목을 입력하세요'); return false; }
     if (!day) { toast('날짜를 선택하세요'); return false; }
     const row = {
@@ -440,8 +440,8 @@ async function editEvent(id) {
   } });
   if (e) buttons.push({ label: '📄 복사', value: 'copy' });
   buttons.push({ label: '취소', value: null }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
-  const res = await modal({ title: e ? '일정 수정' : '새 일정', html, buttons, onMount: ov => {
-    showShare(ov); $('#f_day', ov).addEventListener('change', () => showShare(ov));
+  const res = await modal({ title: e ? '일정 수정' : `${parse(S.sel).getMonth() + 1}월 ${parse(S.sel).getDate()}일 (${WD[parse(S.sel).getDay()]}) 일정 추가`, html, buttons, onMount: ov => {
+    showShare(ov); e && $('#f_day', ov).addEventListener('change', () => showShare(ov));
     $('#f_cats', ov).onclick = ev => {
       const b = ev.target.closest('[data-cat]'); if (!b) return;
       catId = b.dataset.cat; lsSet(CAT_KEY, catId);
