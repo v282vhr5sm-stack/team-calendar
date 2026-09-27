@@ -285,3 +285,5 @@ html, body { max-width: 100%; overflow-x: hidden; }
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
   }
 }
+.star { width: 1.6em; height: 1.6em; vertical-align: -0.45em; margin-right: 2px; flex: none; }
+.chip.done { box-shadow: none; }
