@@ -352,7 +352,7 @@ async function loadOwner() {
   const [l, e, s, c] = await Promise.all([
     sb.from('cal_links').select('*').order('created_at'),
     sb.from('cal_events').select('*').gte('day', ymd(a)).lte('day', ymd(b))
-      .order('day').order('start_time', { nullsFirst: true }).order('created_at'),
+      .order('day').order('sort', { ascending: true, nullsFirst: false }).order('created_at'),
     sb.from('cal_settings').select('company, cats_init, recovery_hash').maybeSingle(),
     sb.from('cal_categories').select('*').order('sort').order('created_at'),
   ]);
@@ -424,6 +424,7 @@ async function askName(first) {
 
 /* ---------- 불러오기 & 실시간 ---------- */
 async function reload() {
+  if (dragging) { scheduleReload(800); return true; }   // 끄는 중에는 화면을 다시 그리지 않음
   const id = ++S.reqId;
   try {
     if (S.mode === 'owner') {
@@ -539,19 +540,87 @@ function renderDay() {
   const done = evs.filter(e => e.done).length;
   $('#dayCount').textContent = evs.length ? `완료 ${done}/${evs.length}` : '';
   const owner = S.mode === 'owner';
+  const canDrag = owner && !l && evs.length > 1;
   $('#dayList').innerHTML = evs.length ? evs.map(e => {
     const who = e.done ? [e.done_by, e.done_at && fmtWhen(e.done_at)].filter(Boolean).map(esc).join(' · ') || '완료' : '';
     const cat = catById(e.category_id);
-    return `<div class="ev ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">
+    return `<div class="ev ${e.done ? 'done' : ''}" data-id="${e.id}" style="--c:${evColor(e)}">
       <button class="check ${e.done ? 'on' : ''}" data-check="${e.id}" aria-pressed="${e.done}" aria-label="${e.done ? '완료 취소' : '완료 체크'}" ${S.busy.has(e.id) ? 'disabled' : ''}>✓</button>
       <button class="body" type="button" data-open="${e.id}" title="${esc([cat?.name, e.memo].filter(Boolean).join(' — '))}">
         <i class="dot"></i><span class="t">${esc(e.title)}</span>${e.memo ? '<span class="has-memo">📝</span>' : ''}
         ${who ? `<span class="who">${who}</span>` : ''}
       </button>
+      ${canDrag ? '<span class="grip" data-grip role="button" aria-label="끌어서 순서 바꾸기" title="끌어서 순서 바꾸기"><i></i><i></i><i></i></span>' : ''}
     </div>`;
   }).join('') : `<div class="empty">${
       l && !linkMatch(l, S.sel) ? (owner ? `이 날은 “${esc(l.name)}” 링크에 포함되지 않아요.` : '이 날은 공유된 일정이 없어요.')
       : owner ? '일정이 없어요. “+ 일정”으로 추가하세요.' : '이 날은 일정이 없어요.'}</div>`;
+}
+
+/* ---------- 하루 일정 순서 바꾸기 (대표, 손잡이를 끌기) ---------- */
+const byOrder = (a, b) => a.day.localeCompare(b.day) || (a.sort ?? 1e9) - (b.sort ?? 1e9) || String(a.created_at || '').localeCompare(String(b.created_at || ''));
+let dragging = false;
+function setupReorder() {
+  const list = $('#dayList');
+  list.addEventListener('pointerdown', e => {
+    const grip = e.target.closest('[data-grip]');
+    if (!grip || S.mode !== 'owner' || dragging) return;
+    e.preventDefault();
+    const row = grip.closest('.ev'), before = [...list.querySelectorAll('.ev')].map(r => r.dataset.id);
+    let startY = e.clientY, lastY = e.clientY;
+    dragging = true;
+    row.classList.add('dragging');
+    try { grip.setPointerCapture(e.pointerId); } catch {}
+    const place = () => {
+      row.style.transform = `translateY(${lastY - startY}px)`;
+      const prev = row.previousElementSibling, next = row.nextElementSibling;
+      if (next && next.classList.contains('ev')) {
+        const r = next.getBoundingClientRect();
+        if (lastY > r.top + r.height / 2) { const t = row.offsetTop; list.insertBefore(next, row); startY += row.offsetTop - t; return place(); }
+      }
+      if (prev && prev.classList.contains('ev')) {
+        const r = prev.getBoundingClientRect();
+        if (lastY < r.top + r.height / 2) { const t = row.offsetTop; list.insertBefore(row, prev); startY += row.offsetTop - t; return place(); }
+      }
+    };
+    let scrollTimer = null;
+    const autoScroll = () => {   // 화면 위·아래 끝으로 끌면 자동으로 스크롤
+      const edge = 70, h = window.innerHeight;
+      const dy = lastY < edge ? -8 : lastY > h - edge ? 8 : 0;
+      if (dy) { const y0 = window.scrollY; window.scrollBy(0, dy); startY -= window.scrollY - y0; place(); }
+      scrollTimer = requestAnimationFrame(autoScroll);
+    };
+    scrollTimer = requestAnimationFrame(autoScroll);
+    const move = ev => { lastY = ev.clientY; place(); };
+    const end = () => {
+      cancelAnimationFrame(scrollTimer);
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', end);
+      grip.removeEventListener('pointercancel', end);
+      row.classList.remove('dragging'); row.style.transform = '';
+      dragging = false;
+      const after = [...list.querySelectorAll('.ev')].map(r => r.dataset.id);
+      if (after.join() !== before.join()) saveOrder(after);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+  });
+}
+async function saveOrder(ids) {
+  // 화면에는 바로 반영 (순서 칸만 바뀜 — 일정 내용은 절대 건드리지 않음)
+  const prev = ids.map(id => [id, S.events.find(x => x.id === id)?.sort]);
+  ids.forEach((id, i) => { const ev = S.events.find(x => x.id === id); if (ev) ev.sort = i + 1; });
+  S.events.sort(byOrder); render();
+  const { error } = await sb.rpc('cal_reorder', { p_ids: ids });
+  if (error) {
+    console.error(error);
+    prev.forEach(([id, v]) => { const ev = S.events.find(x => x.id === id); if (ev) ev.sort = v; });
+    S.events.sort(byOrder); render();
+    toast('순서를 저장하지 못했어요 — 인터넷 연결을 확인하고 다시 해주세요');
+    return;
+  }
+  toast('순서를 바꿨어요');
 }
 
 /* ---------- 완료 체크 ---------- */
@@ -1153,6 +1222,7 @@ function bindUI() {
   $('#btnGroups').onclick = openLinks;
   $('#btnSettings').onclick = openSettings;
   $('#btnSearch').onclick = openSearch;
+  setupReorder();
   $('#btnName').onclick = () => askName(false);
   $('#btnOwnerLogin').onclick = showLogin;
   $('#forgotPw').onclick = forgotPassword;
