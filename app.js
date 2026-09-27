@@ -747,8 +747,21 @@ function bindUI() {
   $('#prev').onclick = () => goMonth(-1);
   $('#next').onclick = () => goMonth(1);
   $('#today').onclick = () => { const n = new Date(); const same = n.getFullYear() === S.y && n.getMonth() === S.m; S.y = n.getFullYear(); S.m = n.getMonth(); S.sel = ymd(n); same ? render() : goMonth(0); };
+  // 폰: 달력을 옆으로 밀어서 달 넘기기 (왼쪽 → 다음 달, 오른쪽 → 이전 달)
+  let sx = 0, sy = 0, swiped = false;
+  const cal = $('.cal');
+  cal.addEventListener('touchstart', e => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; swiped = false; }, { passive: true });
+  cal.addEventListener('touchend', e => {
+    const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    swiped = true; setTimeout(() => { swiped = false; }, 400);
+    const dir = dx < 0 ? 1 : -1;
+    goMonth(dir);
+    const g = $('#grid'); g.classList.remove('slide-l', 'slide-r'); void g.offsetWidth; g.classList.add(dir > 0 ? 'slide-l' : 'slide-r');
+  }, { passive: true });
   $('#grid').onclick = e => {
     const c = e.target.closest('[data-day]'); if (!c) return;
+    if (swiped) return;
     const k = c.dataset.day, d = parse(k);
     S.sel = k;
     if (d.getMonth() !== S.m || d.getFullYear() !== S.y) { S.y = d.getFullYear(); S.m = d.getMonth(); goMonth(0); } else render();

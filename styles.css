@@ -291,3 +291,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
 @media (max-width: 699px) {
   .chip { display: block; white-space: nowrap; word-break: normal; overflow: hidden; text-overflow: clip; -webkit-line-clamp: unset; line-clamp: none; }
 }
+
+/* 달력 옆으로 밀기 */
+.cal { touch-action: pan-y; }
+.grid.slide-l { animation: slideL .22s ease-out; }
+.grid.slide-r { animation: slideR .22s ease-out; }
+@keyframes slideL { from { transform: translateX(28px); opacity: .3; } }
+@keyframes slideR { from { transform: translateX(-28px); opacity: .3; } }
