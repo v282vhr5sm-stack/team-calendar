@@ -285,3 +285,44 @@ returns jsonb language sql security definer stable set search_path = public as $
 $$;
 revoke all on function public.cal_find_account(text) from public;
 grant execute on function public.cal_find_account(text) to anon, authenticated;
+
+-- 7) 비밀번호 찾기 (메일 없이): 대표가 설정에서 정한 "확인번호"로 새 비밀번호 설정 -------------
+--    확인번호는 암호화해서 저장, 5번 틀리면 30분 잠금
+alter table public.cal_settings add column if not exists recovery_hash text;
+alter table public.cal_settings add column if not exists recovery_fails int not null default 0;
+alter table public.cal_settings add column if not exists recovery_locked_until timestamptz;
+
+create or replace function public.cal_set_recovery_code(p_code text)
+returns void language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if auth.uid() is null then raise exception 'not allowed'; end if;
+  if coalesce(p_code, '') !~ '^[0-9]{4,12}$' then raise exception '확인번호는 숫자 4~12자리로 정하세요'; end if;
+  insert into public.cal_settings (owner, recovery_hash, recovery_fails, recovery_locked_until)
+  values (auth.uid(), extensions.crypt(p_code, extensions.gen_salt('bf')), 0, null)
+  on conflict (owner) do update set recovery_hash = excluded.recovery_hash, recovery_fails = 0, recovery_locked_until = null;
+end $$;
+revoke all on function public.cal_set_recovery_code(text) from public, anon;
+grant execute on function public.cal_set_recovery_code(text) to authenticated;
+
+create or replace function public.cal_reset_password(p_email text, p_code text, p_new text)
+returns jsonb language plpgsql security definer set search_path = public, extensions as $$
+declare uid uuid; st public.cal_settings;
+begin
+  if length(coalesce(p_new, '')) < 6 then return jsonb_build_object('error', 'short'); end if;
+  select u.id into uid from auth.users u where lower(u.email) = lower(trim(coalesce(p_email, ''))) limit 1;
+  if uid is null then return jsonb_build_object('error', 'bad'); end if;
+  select * into st from public.cal_settings where owner = uid;
+  if st.owner is null or st.recovery_hash is null then return jsonb_build_object('error', 'nocode'); end if;
+  if st.recovery_locked_until > now() then return jsonb_build_object('error', 'locked'); end if;
+  if extensions.crypt(coalesce(p_code, ''), st.recovery_hash) <> st.recovery_hash then
+    update public.cal_settings set recovery_fails = recovery_fails + 1,
+      recovery_locked_until = case when recovery_fails + 1 >= 5 then now() + interval '30 minutes' end
+      where owner = uid;
+    return jsonb_build_object('error', case when st.recovery_fails + 1 >= 5 then 'locked' else 'bad' end);
+  end if;
+  update auth.users set encrypted_password = extensions.crypt(p_new, extensions.gen_salt('bf')), updated_at = now() where id = uid;
+  update public.cal_settings set recovery_fails = 0, recovery_locked_until = null where owner = uid;
+  return jsonb_build_object('ok', true);
+end $$;
+revoke all on function public.cal_reset_password(text, text, text) from public;
+grant execute on function public.cal_reset_password(text, text, text) to anon, authenticated;
