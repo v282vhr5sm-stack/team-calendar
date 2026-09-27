@@ -230,3 +230,5 @@ body.owner .member-only, body.member .owner-only { display: none !important; }
 .mini-grid button.on::after { background: #fff; }
 .picked { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
 .pchip { border: 1px solid var(--line); background: var(--soft); border-radius: 999px; padding: 4px 10px; font-size: 13px; }
+.mini-grid button.mark { outline: 2px dashed var(--primary); outline-offset: -3px; }
+.mbtns .btn { flex: 0 0 auto; }

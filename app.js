@@ -425,8 +425,9 @@ async function editEvent(id) {
     if (error) { toast('삭제 실패: ' + error.message); return false; }
     await reload(); toast('삭제했어요');
   } });
+  if (e) buttons.push({ label: '📄 복사', value: 'copy' });
   buttons.push({ label: '취소', value: null }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
-  await modal({ title: e ? '일정 수정' : '새 일정', html, buttons, onMount: ov => {
+  const res = await modal({ title: e ? '일정 수정' : '새 일정', html, buttons, onMount: ov => {
     showShare(ov); $('#f_day', ov).addEventListener('change', () => showShare(ov));
     $('#f_colors', ov).onclick = ev => {
       const b = ev.target.closest('[data-c]'); if (!b) return;
@@ -435,6 +436,74 @@ async function editEvent(id) {
     };
     if (!e) $('#f_title', ov).focus();
   } });
+  if (res === 'copy') copyEvent(e);
+}
+
+// 여러 날짜를 고르는 작은 달력 (dates: 선택된 'YYYY-MM-DD' Set)
+function miniCal(root, dates, y, m, mark) {
+  root.innerHTML = `<div class="mini">
+      <div class="mini-bar"><button type="button" class="btn ghost icon" data-mm="-1">‹</button><b></b><button type="button" class="btn ghost icon" data-mm="1">›</button></div>
+      <div class="mini-dow">${WD.map(w => `<span>${w}</span>`).join('')}</div>
+      <div class="mini-grid"></div>
+    </div>
+    <div class="picked"></div>`;
+  const draw = () => {
+    $('.mini-bar b', root).textContent = `${y}년 ${m + 1}월`;
+    const f = new Date(y, m, 1), start = new Date(f); start.setDate(1 - f.getDay());
+    const today = ymd(new Date());
+    let h = '';
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start); d.setDate(start.getDate() + i); const k = ymd(d);
+      h += `<button type="button" data-d="${k}" class="${[d.getMonth() !== m && 'out', dates.has(k) && 'on', k === today && 'today', k === mark && 'mark'].filter(Boolean).join(' ')}">${d.getDate()}</button>`;
+    }
+    $('.mini-grid', root).innerHTML = h;
+    const ds = [...dates].sort();
+    $('.picked', root).innerHTML = ds.length
+      ? `<span class="fieldlabel">${ds.length}일 선택</span>` + ds.map(k => `<button type="button" class="pchip" data-x="${k}">${md(k)} ✕</button>`).join('')
+      : '<span class="fieldlabel">선택한 날짜가 없어요</span>';
+  };
+  root.onclick = e => {
+    const mm = e.target.closest('[data-mm]'), d = e.target.closest('[data-d]'), x = e.target.closest('[data-x]');
+    if (mm) { m += +mm.dataset.mm; if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; } }
+    else if (d) dates.has(d.dataset.d) ? dates.delete(d.dataset.d) : dates.add(d.dataset.d);
+    else if (x) dates.delete(x.dataset.x);
+    else return;
+    draw();
+  };
+  draw();
+  return { draw, go(yy, mo) { y = yy; m = mo; draw(); } };
+}
+
+/* ---------- 일정 복사 (대표) ---------- */
+async function copyEvent(e) {
+  const dates = new Set(), base = parse(e.day);
+  await modal({
+    title: '일정 복사',
+    text: `“${e.title}” 일정을 제목·메모·색깔 그대로 복사해요. 복사할 날짜를 고르세요 (여러 날 가능, 점선이 원래 날짜).`,
+    html: `<div class="quick">
+        <button type="button" class="btn sm" data-add="1">다음 날</button>
+        <button type="button" class="btn sm" data-add="7">다음 주 같은 요일</button>
+        <button type="button" class="btn sm" data-add="w4">앞으로 4주 매주</button>
+      </div>
+      <div id="cp_cal" style="margin-top:8px"></div>`,
+    buttons: [{ label: '취소', value: false }, { label: '복사하기', cls: 'primary', value: true, run: async () => {
+      if (!dates.size) { toast('복사할 날짜를 고르세요'); return false; }
+      const rows = [...dates].sort().map(day => ({ title: e.title, memo: e.memo || '', color: evColor(e), day }));
+      const { error } = await sb.from('cal_events').insert(rows);
+      if (error) { toast('복사 실패: ' + error.message); return false; }
+      await reload(); toast(`${rows.length}개 날짜에 복사했어요`);
+    } }],
+    onMount: ov => {
+      const cal = miniCal($('#cp_cal', ov), dates, base.getFullYear(), base.getMonth(), e.day);
+      $('.quick', ov).onclick = ev => {
+        const a = ev.target.closest('[data-add]')?.dataset.add; if (!a) return;
+        const add = n => { const d = new Date(base); d.setDate(d.getDate() + n); dates.add(ymd(d)); return d; };
+        let last;
+        if (a === 'w4') for (let i = 1; i <= 4; i++) last = add(7 * i); else last = add(+a);
+        cal.go(last.getFullYear(), last.getMonth());
+      };
+    },
+  });
 }
 
 /* ---------- 공유 링크 (대표) ---------- */
