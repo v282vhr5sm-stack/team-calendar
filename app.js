@@ -11,15 +11,21 @@ const COLORS = [
   ['#2563eb', '파랑'], ['#16a34a', '초록'], ['#f59e0b', '주황'], ['#dc2626', '빨강'],
   ['#9333ea', '보라'], ['#0891b2', '청록'], ['#db2777', '분홍'], ['#64748b', '회색'],
 ];
-const COLOR_KEY = 'tc.lastColor';
-const evColor = e => e.color || COLORS[0][0];
+const CAT_KEY = 'tc.lastCat';
+// 처음 쓸 때 넣어두는 기본 분류 (설정 > 분류 관리에서 자유롭게 수정)
+const DEFAULT_CATS = [
+  ['철수날짜', '#ef5cf5'], ['철수완료', '#16b34a'], ['연장', '#98703f'], ['AS', '#ff4f0f'],
+  ['연기', '#5661b0'], ['납품완료', '#0b35f5'], ['전날입고가능', '#ff9fd0'],
+];
+const catById = id => S.cats.find(c => c.id === id);
+const evColor = e => catById(e.category_id)?.color || e.color || COLORS[0][0];
 const KIND_LABEL = { all: '전체 일정', weekdays: '요일별', dates: '날짜 선택' };
 const KIND_ICON = { all: '📋', weekdays: '🔁', dates: '📌' };
 
 const S = {
   mode: null,          // 'owner' | 'member'
   user: null, token: null,
-  links: [], events: [], company: '', link: null,
+  links: [], events: [], cats: [], company: '', catsInit: true, link: null,
   y: 0, m: 0, sel: '', filter: 'all',
   ch: null, busy: new Set(), askedName: false, reqId: 0,
 };
@@ -171,20 +177,26 @@ async function startOwner(user) {
     const { error } = await sb.from('cal_links').insert({ name: '전체 일정', kind: 'all' });
     if (!error) { lsSet('tc.linksInit.' + user.id, '1'); await reload(); toast('“전체 일정” 공유 링크를 만들었어요'); }
   }
+  if (!S.catsInit) {
+    if (!S.cats.length) await sb.from('cal_categories').insert(DEFAULT_CATS.map(([name, color], i) => ({ name, color, sort: i })));
+    await sb.from('cal_settings').upsert({ owner: user.id, company: S.company, cats_init: true });
+    await reload();
+  }
   subscribe('cal-owner-' + user.id);
 }
 
 async function loadOwner() {
   const [a, b] = gridRange();
-  const [l, e, s] = await Promise.all([
+  const [l, e, s, c] = await Promise.all([
     sb.from('cal_links').select('*').order('created_at'),
     sb.from('cal_events').select('*').gte('day', ymd(a)).lte('day', ymd(b))
       .order('day').order('start_time', { nullsFirst: true }).order('created_at'),
-    sb.from('cal_settings').select('company').maybeSingle(),
+    sb.from('cal_settings').select('company, cats_init').maybeSingle(),
+    sb.from('cal_categories').select('*').order('sort').order('created_at'),
   ]);
-  const err = l.error || e.error || s.error;
+  const err = l.error || e.error || s.error || c.error;
   if (err) throw err;
-  return { links: l.data, events: e.data, company: s.data?.company || '' };
+  return { links: l.data, events: e.data, company: s.data?.company || '', catsInit: !!s.data?.cats_init, cats: c.data };
 }
 
 /* ---------- 직원 모드 ---------- */
@@ -234,7 +246,7 @@ async function reload() {
     if (S.mode === 'owner') {
       const r = await loadOwner();
       if (id !== S.reqId) return true;
-      S.links = r.links; S.events = r.events; S.company = r.company;
+      S.links = r.links; S.events = r.events; S.company = r.company; S.cats = r.cats; S.catsInit = r.catsInit;
       $('#brandTitle').textContent = S.company || '팀 캘린더';
       if (S.filter !== 'all' && !S.links.some(l => l.id === S.filter)) S.filter = 'all';
     } else if (S.mode === 'member') {
@@ -245,7 +257,7 @@ async function reload() {
         notice('🔒', '링크를 열 수 없어요', '링크가 바뀌었거나 삭제되었어요. 대표님께 새 링크를 받아주세요.', { label: '대표 로그인', run: showLogin });
         return false;
       }
-      S.link = r.link; S.company = r.company; S.events = r.events;
+      S.link = r.link; S.company = r.company; S.events = r.events; S.cats = r.categories || [];
       $('#brandTitle').textContent = r.link.name;
       $('#brandSub').textContent = [r.company, linkDesc(r.link)].filter(Boolean).join(' · ');
       document.title = `${r.link.name} · ${r.company || '팀 캘린더'}`;
@@ -304,7 +316,7 @@ setInterval(() => { if (!document.hidden && S.mode) reload(); }, 30000);
 function activeLink() { return S.mode === 'member' ? S.link : S.links.find(l => l.id === S.filter) || null; }
 function visibleEvents() { const l = activeLink(); return l ? S.events.filter(e => linkMatch(l, e.day)) : S.events; }
 
-function render() { renderFilters(); renderCal(); renderDay(); }
+function render() { renderFilters(); renderCal(); renderDay(); $('#legend').innerHTML = legendHtml(); }
 
 function renderFilters() {
   if (S.mode !== 'owner') return;
@@ -340,20 +352,15 @@ function renderDay() {
   const done = evs.filter(e => e.done).length;
   $('#dayCount').textContent = evs.length ? `완료 ${done}/${evs.length}` : '';
   const owner = S.mode === 'owner';
-  const shareTags = e => {
-    const ls = S.links.filter(x => linkMatch(x, e.day));
-    return ls.length ? ls.map(x => `<span class="tag">${KIND_ICON[x.kind]} ${esc(x.name)}</span>`).join('') : '<span class="tag">🔒 공유 안 됨</span>';
-  };
   $('#dayList').innerHTML = evs.length ? evs.map(e => {
-    const dm = e.done ? `<span class="donemark">✓ 완료${e.done_by ? ' · ' + esc(e.done_by) : ''}${e.done_at ? ' · ' + fmtWhen(e.done_at) : ''}</span>` : '';
-    const tags = owner ? shareTags(e) : '';
+    const who = e.done ? [e.done_by, e.done_at && fmtWhen(e.done_at)].filter(Boolean).map(esc).join(' · ') || '완료' : '';
+    const cat = catById(e.category_id);
     return `<div class="ev ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">
       <button class="check ${e.done ? 'on' : ''}" data-check="${e.id}" aria-pressed="${e.done}" aria-label="${e.done ? '완료 취소' : '완료 체크'}" ${S.busy.has(e.id) ? 'disabled' : ''}>✓</button>
-      <${owner ? 'button' : 'div'} class="body ${owner ? 'edit' : ''}" ${owner ? `data-edit="${e.id}" type="button"` : ''}>
-        <div class="t">${esc(e.title)}</div>
-        ${e.memo ? `<div class="memo">${esc(e.memo)}</div>` : ''}
-        ${tags || dm ? `<div class="meta">${dm}${tags}</div>` : ''}
-      </${owner ? 'button' : 'div'}>
+      <button class="body" type="button" data-open="${e.id}" title="${esc([cat?.name, e.memo].filter(Boolean).join(' — '))}">
+        <i class="dot"></i><span class="t">${esc(e.title)}</span>${e.memo ? '<span class="has-memo">📝</span>' : ''}
+        ${who ? `<span class="who">${who}</span>` : ''}
+      </button>
     </div>`;
   }).join('') : `<div class="empty">${
       l && !linkMatch(l, S.sel) ? (owner ? `이 날은 “${esc(l.name)}” 링크에 포함되지 않아요.` : '이 날은 공유된 일정이 없어요.')
@@ -393,13 +400,14 @@ async function toggleDone(id) {
 /* ---------- 일정 편집 (대표) ---------- */
 async function editEvent(id) {
   const e = id ? S.events.find(x => x.id === id) : null;
-  let color = e?.color || lsGet(COLOR_KEY) || COLORS[0][0];
+  let catId = e ? e.category_id : (catById(lsGet(CAT_KEY)) ? lsGet(CAT_KEY) : S.cats[0]?.id) || null;
+  const catButtons = () => S.cats.map(c => `<button type="button" style="--c:${c.color}" data-cat="${c.id}" class="${c.id === catId ? 'on' : ''}"><i></i>${esc(c.name)}</button>`).join('');
   const html = `
     <label>일정 제목<input id="f_title" maxlength="100" required value="${esc(e?.title)}" placeholder="예: 매장 오픈 준비"></label>
     <label>날짜<input id="f_day" type="date" required value="${e?.day || S.sel}"></label>
     <label>메모 (선택)<textarea id="f_memo" rows="3" maxlength="1000" placeholder="준비물, 장소 등">${esc(e?.memo)}</textarea></label>
-    <div class="fieldlabel">색깔</div>
-    <div class="colors" id="f_colors">${COLORS.map(([c, n]) => `<button type="button" style="--c:${c}" data-c="${c}" class="${c === color ? 'on' : ''}" aria-label="${n}" title="${n}"></button>`).join('')}</div>
+    <div class="fieldlabel">분류 (색깔) <button type="button" class="linkbtn" id="f_cats_edit">분류 관리</button></div>
+    <div class="catpick" id="f_cats">${catButtons() || '<span class="fieldlabel">분류 관리에서 분류를 먼저 만드세요.</span>'}</div>
     <p class="fieldlabel" id="f_share"></p>`;
   const showShare = ov => {
     const day = $('#f_day', ov).value, ls = day ? S.links.filter(l => linkMatch(l, day)) : [];
@@ -410,7 +418,7 @@ async function editEvent(id) {
     if (!title) { $('#f_title', ov).focus(); toast('제목을 입력하세요'); return false; }
     if (!day) { toast('날짜를 선택하세요'); return false; }
     const row = {
-      title, day, color, memo: $('#f_memo', ov).value.trim(),
+      title, day, category_id: catId, color: catById(catId)?.color || e?.color || COLORS[0][0], memo: $('#f_memo', ov).value.trim(),
       start_time: null, end_time: null,
       updated_at: new Date().toISOString(),
     };
@@ -432,11 +440,12 @@ async function editEvent(id) {
   buttons.push({ label: '취소', value: null }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
   const res = await modal({ title: e ? '일정 수정' : '새 일정', html, buttons, onMount: ov => {
     showShare(ov); $('#f_day', ov).addEventListener('change', () => showShare(ov));
-    $('#f_colors', ov).onclick = ev => {
-      const b = ev.target.closest('[data-c]'); if (!b) return;
-      color = b.dataset.c; lsSet(COLOR_KEY, color);
-      ov.querySelectorAll('#f_colors button').forEach(x => x.classList.toggle('on', x === b));
+    $('#f_cats', ov).onclick = ev => {
+      const b = ev.target.closest('[data-cat]'); if (!b) return;
+      catId = b.dataset.cat; lsSet(CAT_KEY, catId);
+      ov.querySelectorAll('#f_cats button').forEach(x => x.classList.toggle('on', x === b));
     };
+    $('#f_cats_edit', ov).onclick = async () => { await openCategories(); $('#f_cats', ov).innerHTML = catButtons(); };
     if (!e) $('#f_title', ov).focus();
   } });
   if (res === 'copy') copyEvent(e);
@@ -491,7 +500,7 @@ async function copyEvent(e) {
       <div id="cp_cal" style="margin-top:8px"></div>`,
     buttons: [{ label: '취소', value: false }, { label: '복사하기', cls: 'primary', value: true, run: async () => {
       if (!dates.size) { toast('복사할 날짜를 고르세요'); return false; }
-      const rows = [...dates].sort().map(day => ({ title: e.title, memo: e.memo || '', color: evColor(e), day }));
+      const rows = [...dates].sort().map(day => ({ title: e.title, memo: e.memo || '', color: evColor(e), category_id: e.category_id || null, day }));
       const { error } = await sb.from('cal_events').insert(rows);
       if (error) { toast('복사 실패: ' + error.message); return false; }
       await reload(); toast(`${rows.length}개 날짜에 복사했어요`);
@@ -641,7 +650,15 @@ async function openSettings() {
   await modal({
     title: '설정',
     html: `<label>회사 이름 (직원 화면 상단에 표시)<input id="s_co" maxlength="40" value="${esc(S.company)}"></label>
-      <p class="fieldlabel">로그인: ${esc(S.user?.email)}</p>`,
+      <div class="fieldlabel">분류 (색깔)</div>
+      <div class="catlegend" id="s_cats"></div>
+      <button type="button" class="btn wide" id="s_cats_btn" style="margin:8px 0 12px">🎨 분류 관리 (추가·수정·삭제)</button>
+      <p class="fieldlabel">로그인: ${esc(S.user?.email)} · 이 기기에서 자동 로그인 유지</p>`,
+    onMount: ov => {
+      const draw = () => { $('#s_cats', ov).innerHTML = legendHtml() || '<span class="fieldlabel">분류가 없어요</span>'; };
+      draw();
+      $('#s_cats_btn', ov).onclick = async () => { await openCategories(); draw(); };
+    },
     buttons: [
       { label: '로그아웃', cls: 'danger left', run: async () => { await sb.auth.signOut(); showLogin(); } },
       { label: '닫기' },
@@ -652,6 +669,68 @@ async function openSettings() {
         await reload(); toast('저장했어요');
       } },
     ],
+  });
+}
+
+/* ---------- 분류(색깔) 관리 (대표) ---------- */
+function legendHtml() { return S.cats.map(c => `<span class="lg" style="--c:${c.color}"><i></i>${esc(c.name)}</span>`).join(''); }
+
+async function openCategories() {
+  // 편집용 사본: 저장을 눌러야 서버에 반영
+  const rows = S.cats.map(c => ({ id: c.id, name: c.name, color: c.color }));
+  const removed = [];
+  await modal({
+    title: '분류 관리',
+    text: '색 동그라미를 누르면 원하는 색으로 바꿀 수 있어요. 분류 색을 바꾸면 그 분류 일정의 색도 함께 바뀌어요.',
+    html: `<div class="catlist" id="catlist"></div>
+      <button type="button" class="btn wide" id="cat_add" style="margin-top:10px">+ 분류 추가</button>`,
+    buttons: [{ label: '취소', value: false }, { label: '저장', cls: 'primary', value: true, run: async ov => {
+      ov.querySelectorAll('.catrow').forEach((r, i) => { rows[i].name = $('input[type=text]', r).value.trim(); });
+      if (rows.some(r => !r.name)) { toast('분류 이름을 입력하세요'); return false; }
+      if (removed.length) {
+        if (!(await confirmBox('분류를 삭제할까요?', `${removed.length}개 분류를 삭제해요. 그 분류였던 일정은 지워지지 않고 색만 그대로 남아요.`, '삭제하고 저장', '취소', true))) return false;
+        const { error } = await sb.from('cal_categories').delete().in('id', removed);
+        if (error) { toast('저장 실패: ' + error.message); return false; }
+      }
+      for (const [i, r] of rows.entries()) {
+        const { error } = r.id
+          ? await sb.from('cal_categories').update({ name: r.name, color: r.color, sort: i }).eq('id', r.id)
+          : await sb.from('cal_categories').insert({ name: r.name, color: r.color, sort: i });
+        if (error) { toast('저장 실패: ' + error.message); return false; }
+      }
+      await reload(); toast('분류를 저장했어요');
+    } }],
+    onMount: ov => {
+      const list = $('#catlist', ov);
+      const sync = () => list.querySelectorAll('.catrow').forEach((r, i) => { rows[i].name = $('input[type=text]', r).value; });
+      const draw = () => {
+        list.innerHTML = rows.map((r, i) => `<div class="catrow">
+            <label class="swatch" style="--c:${r.color}"><input type="color" value="${r.color}" data-color="${i}" aria-label="색 선택"></label>
+            <input type="text" maxlength="20" value="${esc(r.name)}" placeholder="분류 이름">
+            <button type="button" class="btn ghost icon" data-up="${i}" aria-label="위로" ${i ? '' : 'disabled'}>↑</button>
+            <button type="button" class="btn ghost icon danger" data-del="${i}" aria-label="삭제">✕</button>
+          </div>`).join('') || '<div class="empty">분류가 없어요. 아래에서 추가하세요.</div>';
+      };
+      draw();
+      list.addEventListener('input', ev => {
+        const c = ev.target.closest('[data-color]'); if (!c) return;
+        rows[+c.dataset.color].color = c.value; c.parentElement.style.setProperty('--c', c.value);
+      });
+      list.addEventListener('click', ev => {
+        const up = ev.target.closest('[data-up]'), del = ev.target.closest('[data-del]');
+        if (!up && !del) return;
+        sync();
+        if (up) { const i = +up.dataset.up; [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; }
+        if (del) { const [r] = rows.splice(+del.dataset.del, 1); if (r.id) removed.push(r.id); }
+        draw();
+      });
+      $('#cat_add', ov).onclick = () => {
+        sync();
+        const used = new Set(rows.map(r => r.color));
+        rows.push({ name: '', color: (COLORS.find(([c]) => !used.has(c)) || COLORS[0])[0] });
+        draw(); list.querySelector('.catrow:last-child input[type=text]').focus();
+      };
+    },
   });
 }
 
@@ -675,7 +754,11 @@ function bindUI() {
   };
   $('#dayList').onclick = e => {
     const c = e.target.closest('[data-check]'); if (c) return toggleDone(c.dataset.check);
-    const ed = e.target.closest('[data-edit]'); if (ed && S.mode === 'owner') editEvent(ed.dataset.edit);
+    const op = e.target.closest('[data-open]'); if (!op) return;
+    if (S.mode === 'owner') return editEvent(op.dataset.open);
+    const ev = S.events.find(x => x.id === op.dataset.open); if (!ev) return;
+    const cat = catById(ev.category_id);
+    modal({ title: ev.title, text: [cat && '분류: ' + cat.name, ev.memo, ev.done && '✓ 완료 ' + [ev.done_by, fmtWhen(ev.done_at)].filter(Boolean).join(' · ')].filter(Boolean).join('\n'), buttons: [{ label: '닫기', cls: 'primary' }] });
   };
   $('#filters').onclick = e => { const b = e.target.closest('[data-f]'); if (!b) return; S.filter = b.dataset.f; render(); };
   $('#btnAdd').onclick = () => editEvent(null);

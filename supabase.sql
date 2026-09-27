@@ -29,6 +29,18 @@ alter table public.cal_events drop column if exists group_ids;
 alter table public.cal_events add column if not exists color text not null default '#2563eb';
 create index if not exists cal_events_owner_day on public.cal_events (owner, day);
 
+-- 색깔 분류 (예: 철수날짜=분홍, 납품완료=파랑). 설정에서 추가·수정·삭제
+create table if not exists public.cal_categories (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  name text not null,
+  color text not null,
+  sort int not null default 0,
+  created_at timestamptz not null default now()
+);
+alter table public.cal_events add column if not exists category_id uuid references public.cal_categories(id) on delete set null;
+alter table public.cal_settings add column if not exists cats_init boolean not null default false;
+
 -- 공유 링크: kind = 'all'(전체) | 'weekdays'(요일별, 0=일~6=토) | 'dates'(선택한 날짜)
 create table if not exists public.cal_links (
   id uuid primary key default gen_random_uuid(),
@@ -45,6 +57,12 @@ create table if not exists public.cal_links (
 alter table public.cal_settings enable row level security;
 alter table public.cal_events   enable row level security;
 alter table public.cal_links    enable row level security;
+alter table public.cal_categories enable row level security;
+drop policy if exists "cal_categories owner" on public.cal_categories;
+create policy "cal_categories owner" on public.cal_categories for all to authenticated
+  using (auth.uid() = owner) with check (auth.uid() = owner);
+grant select, insert, update, delete on public.cal_categories to authenticated;
+revoke all on public.cal_categories from anon;
 
 drop policy if exists "cal_settings owner" on public.cal_settings;
 create policy "cal_settings owner" on public.cal_settings for all to authenticated
@@ -80,13 +98,15 @@ begin
   return jsonb_build_object(
     'link', jsonb_build_object('name', l.name, 'kind', l.kind, 'weekdays', to_jsonb(l.weekdays), 'dates', to_jsonb(l.dates)),
     'company', coalesce((select s.company from public.cal_settings s where s.owner = l.owner), ''),
+    'categories', coalesce((select jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name, 'color', c.color) order by c.sort, c.created_at)
+      from public.cal_categories c where c.owner = l.owner), '[]'::jsonb),
     'events', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'id', e.id, 'title', e.title, 'memo', e.memo, 'day', e.day, 'color', e.color,
+        'id', e.id, 'title', e.title, 'memo', e.memo, 'day', e.day, 'color', coalesce(c.color, e.color), 'category_id', e.category_id,
         'start_time', e.start_time, 'end_time', e.end_time,
         'done', e.done, 'done_by', e.done_by, 'done_at', e.done_at)
         order by e.day, e.start_time nulls first, e.created_at)
-      from public.cal_events e
+      from public.cal_events e left join public.cal_categories c on c.id = e.category_id
       where e.owner = l.owner and e.day between p_from and p_to
         and public.cal_link_match(l.kind, l.weekdays, l.dates, e.day)), '[]'::jsonb));
 end $$;
@@ -166,3 +186,7 @@ end $$;
 drop trigger if exists cal_settings_notify on public.cal_settings;
 create trigger cal_settings_notify after insert or update on public.cal_settings
   for each row execute function public.cal_settings_notify();
+
+drop trigger if exists cal_categories_notify on public.cal_categories;
+create trigger cal_categories_notify after insert or update or delete on public.cal_categories
+  for each row execute function public.cal_events_notify();
