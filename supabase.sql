@@ -26,6 +26,7 @@ create table if not exists public.cal_events (
   updated_at timestamptz not null default now()
 );
 alter table public.cal_events drop column if exists group_ids;
+alter table public.cal_events add column if not exists color text not null default '#2563eb';
 create index if not exists cal_events_owner_day on public.cal_events (owner, day);
 
 -- 공유 링크: kind = 'all'(전체) | 'weekdays'(요일별, 0=일~6=토) | 'dates'(선택한 날짜)
@@ -81,7 +82,7 @@ begin
     'company', coalesce((select s.company from public.cal_settings s where s.owner = l.owner), ''),
     'events', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'id', e.id, 'title', e.title, 'memo', e.memo, 'day', e.day,
+        'id', e.id, 'title', e.title, 'memo', e.memo, 'day', e.day, 'color', e.color,
         'start_time', e.start_time, 'end_time', e.end_time,
         'done', e.done, 'done_by', e.done_by, 'done_at', e.done_at)
         order by e.day, e.start_time nulls first, e.created_at)

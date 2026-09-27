@@ -1,9 +1,18 @@
 /* 팀 캘린더 — 대표: 일정 작성/수정, 직원(링크): 보기 + 완료 체크 */
 const $ = (s, el = document) => el.querySelector(s);
 const cfg = window.APP_CONFIG || {};
-const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY);
+// 대표 로그인은 이 기기에 저장되고 자동으로 갱신됨 → 직접 로그아웃하기 전까지 자동 로그인
+const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+});
 const TOKEN_KEY = 'tc.token', NAME_KEY = 'tc.name';
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
+const COLORS = [
+  ['#2563eb', '파랑'], ['#16a34a', '초록'], ['#f59e0b', '주황'], ['#dc2626', '빨강'],
+  ['#9333ea', '보라'], ['#0891b2', '청록'], ['#db2777', '분홍'], ['#64748b', '회색'],
+];
+const COLOR_KEY = 'tc.lastColor';
+const evColor = e => e.color || COLORS[0][0];
 const KIND_LABEL = { all: '전체 일정', weekdays: '요일별', dates: '날짜 선택' };
 const KIND_ICON = { all: '📋', weekdays: '🔁', dates: '📌' };
 
@@ -27,7 +36,6 @@ const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localSt
 const shareUrl = token => `${location.origin}${location.pathname}?g=${token}`;
 const newToken = () => crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
 function fmtWhen(iso) { if (!iso) return ''; const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
-function timeText(e) { const a = hm(e.start_time), b = hm(e.end_time); return a && b ? `${a} – ${b}` : a ? `${a}~` : b ? `~${b}` : '종일'; }
 function gridRange() { const first = new Date(S.y, S.m, 1); const a = new Date(first); a.setDate(1 - first.getDay()); const b = new Date(a); b.setDate(a.getDate() + 41); return [a, b]; }
 
 // 링크 규칙: 이 날짜가 링크에 포함되는지
@@ -248,7 +256,14 @@ async function reload() {
       notice('🛠️', '데이터베이스 준비가 필요해요', 'Supabase SQL Editor에서 supabase.sql 을 한 번 실행해 주세요.');
       return false;
     }
-    if (/JWT|session/i.test(m) && S.mode === 'owner') { await sb.auth.signOut(); showLogin(); return false; }
+    // 로그인 토큰 만료 등: 로그아웃시키지 않고 조용히 갱신 후 다시 시도
+    if (/JWT|expired|401/i.test(m) && S.mode === 'owner' && !S.retried) {
+      S.retried = true;
+      const { error } = await sb.auth.refreshSession();
+      S.retried = false;
+      if (!error) return reload();
+      if (/refresh token|not found|invalid/i.test(error.message || '')) { showLogin(); return false; }
+    }
     render();
     toast('불러오기 실패 — 인터넷 연결을 확인하세요');
     return S.mode === 'owner' || !!S.link;
@@ -309,7 +324,7 @@ function renderCal() {
     html += `<button class="${cls}" data-day="${k}" aria-label="${d.getMonth() + 1}월 ${d.getDate()}일 일정 ${evs.length}개">
       <span class="num">${d.getDate()}</span>
       ${evs.length ? `<span class="cnt ${done === evs.length ? 'all' : ''}">${done}/${evs.length}</span>` : ''}
-      <span class="chips">${evs.slice(0, 3).map(e => `<span class="chip ${e.done ? 'done' : ''}">${esc(e.title)}</span>`).join('')}
+      <span class="chips">${evs.slice(0, 3).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${esc(e.title)}</span>`).join('')}
       ${evs.length > 3 ? `<span class="more">+${evs.length - 3}</span>` : ''}</span></button>`;
   }
   $('#grid').innerHTML = html;
@@ -329,10 +344,9 @@ function renderDay() {
   $('#dayList').innerHTML = evs.length ? evs.map(e => {
     const dm = e.done ? `<span class="donemark">✓ 완료${e.done_by ? ' · ' + esc(e.done_by) : ''}${e.done_at ? ' · ' + fmtWhen(e.done_at) : ''}</span>` : '';
     const tags = owner ? shareTags(e) : '';
-    return `<div class="ev ${e.done ? 'done' : ''}">
+    return `<div class="ev ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">
       <button class="check ${e.done ? 'on' : ''}" data-check="${e.id}" aria-pressed="${e.done}" aria-label="${e.done ? '완료 취소' : '완료 체크'}" ${S.busy.has(e.id) ? 'disabled' : ''}>✓</button>
       <${owner ? 'button' : 'div'} class="body ${owner ? 'edit' : ''}" ${owner ? `data-edit="${e.id}" type="button"` : ''}>
-        <div class="time">${timeText(e)}</div>
         <div class="t">${esc(e.title)}</div>
         ${e.memo ? `<div class="memo">${esc(e.memo)}</div>` : ''}
         ${tags || dm ? `<div class="meta">${dm}${tags}</div>` : ''}
@@ -376,14 +390,13 @@ async function toggleDone(id) {
 /* ---------- 일정 편집 (대표) ---------- */
 async function editEvent(id) {
   const e = id ? S.events.find(x => x.id === id) : null;
+  let color = e?.color || lsGet(COLOR_KEY) || COLORS[0][0];
   const html = `
     <label>일정 제목<input id="f_title" maxlength="100" required value="${esc(e?.title)}" placeholder="예: 매장 오픈 준비"></label>
     <label>날짜<input id="f_day" type="date" required value="${e?.day || S.sel}"></label>
-    <div class="row2">
-      <label>시작 (선택)<input id="f_st" type="time" value="${hm(e?.start_time)}"></label>
-      <label>종료 (선택)<input id="f_et" type="time" value="${hm(e?.end_time)}"></label>
-    </div>
     <label>메모 (선택)<textarea id="f_memo" rows="3" maxlength="1000" placeholder="준비물, 장소 등">${esc(e?.memo)}</textarea></label>
+    <div class="fieldlabel">색깔</div>
+    <div class="colors" id="f_colors">${COLORS.map(([c, n]) => `<button type="button" style="--c:${c}" data-c="${c}" class="${c === color ? 'on' : ''}" aria-label="${n}" title="${n}"></button>`).join('')}</div>
     <p class="fieldlabel" id="f_share"></p>`;
   const showShare = ov => {
     const day = $('#f_day', ov).value, ls = day ? S.links.filter(l => linkMatch(l, day)) : [];
@@ -394,8 +407,8 @@ async function editEvent(id) {
     if (!title) { $('#f_title', ov).focus(); toast('제목을 입력하세요'); return false; }
     if (!day) { toast('날짜를 선택하세요'); return false; }
     const row = {
-      title, day, memo: $('#f_memo', ov).value.trim(),
-      start_time: $('#f_st', ov).value || null, end_time: $('#f_et', ov).value || null,
+      title, day, color, memo: $('#f_memo', ov).value.trim(),
+      start_time: null, end_time: null,
       updated_at: new Date().toISOString(),
     };
     const q = e ? sb.from('cal_events').update(row).eq('id', e.id) : sb.from('cal_events').insert(row);
@@ -415,6 +428,11 @@ async function editEvent(id) {
   buttons.push({ label: '취소', value: null }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
   await modal({ title: e ? '일정 수정' : '새 일정', html, buttons, onMount: ov => {
     showShare(ov); $('#f_day', ov).addEventListener('change', () => showShare(ov));
+    $('#f_colors', ov).onclick = ev => {
+      const b = ev.target.closest('[data-c]'); if (!b) return;
+      color = b.dataset.c; lsSet(COLOR_KEY, color);
+      ov.querySelectorAll('#f_colors button').forEach(x => x.classList.toggle('on', x === b));
+    };
     if (!e) $('#f_title', ov).focus();
   } });
 }

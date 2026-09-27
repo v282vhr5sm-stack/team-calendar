@@ -115,11 +115,11 @@ label input, label textarea, label select {
 .chips { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .chip {
   font-size: 10.5px; line-height: 1.35; padding: 1px 4px; border-radius: 4px; min-width: 0;
-  background: color-mix(in srgb, var(--c) 18%, transparent); border-left: 3px solid var(--c);
+  background: var(--c); color: #fff; font-weight: 600;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 @media (min-width: 700px) { .chip { font-size: 12px; } }
-.chip.done { text-decoration: line-through; opacity: .55; }
+.chip.done { text-decoration: line-through; opacity: .45; }
 .more { font-size: 10px; color: var(--muted); padding-left: 4px; }
 
 /* 하루 목록 */
