@@ -260,3 +260,28 @@ body.owner .member-only, body.member .owner-only { display: none !important; }
 .catrow .btn.icon { min-width: 36px; min-height: 36px; font-size: 16px; }
 .swatch { position: relative; flex: none; width: 36px; height: 36px; margin: 0; border-radius: 50%; background: var(--c); border: 2px solid var(--line); cursor: pointer; }
 .swatch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; margin: 0; padding: 0; border: 0; }
+
+/* ---- 긴 제목이 칸·화면 밖으로 넘치지 않게 (폰) ---- */
+html, body { max-width: 100%; overflow-x: hidden; }
+.layout { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr) 360px; } }
+.cal, .day, .day-list, .ev { min-width: 0; }
+.cell { overflow: hidden; }
+.chips { width: 100%; overflow: hidden; }
+.chip { display: block; max-width: 100%; }
+.ev .body { flex: 1 1 auto; overflow: hidden; }
+.ev .t { min-width: 0; }
+.day-head h3 { white-space: nowrap; }
+.top { min-width: 0; }
+@media (max-width: 699px) {
+  .grid { gap: 1px; }
+  .cal { padding: 8px 4px 6px; }
+  .cell { padding: 3px 2px; min-height: 60px; }
+  .cnt { top: 3px; right: 2px; font-size: 9px; }
+  /* 폰: 제목을 최대 2줄까지 보여주고 칸 안에서 자르기 */
+  .chip {
+    font-size: 10px; line-height: 1.25; padding: 1px 3px; border-radius: 3px;
+    white-space: normal; word-break: break-all;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  }
+}

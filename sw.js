@@ -1,5 +1,5 @@
 // 앱 파일을 수정하면 VERSION 을 올리세요 (그래야 폰에서 새 버전으로 바뀝니다)
-const VERSION = 'tc-v7';
+const VERSION = 'tc-v8';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon.svg'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
