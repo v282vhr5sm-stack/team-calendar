@@ -3,13 +3,14 @@ const $ = (s, el = document) => el.querySelector(s);
 const cfg = window.APP_CONFIG || {};
 const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY);
 const TOKEN_KEY = 'tc.token', NAME_KEY = 'tc.name';
-const COLORS = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#9333ea', '#0891b2', '#db2777', '#64748b'];
 const WD = ['일', '월', '화', '수', '목', '금', '토'];
+const KIND_LABEL = { all: '전체 일정', weekdays: '요일별', dates: '날짜 선택' };
+const KIND_ICON = { all: '📋', weekdays: '🔁', dates: '📌' };
 
 const S = {
   mode: null,          // 'owner' | 'member'
   user: null, token: null,
-  groups: [], events: [], company: '', group: null,
+  links: [], events: [], company: '', link: null,
   y: 0, m: 0, sel: '', filter: 'all',
   ch: null, busy: new Set(), askedName: false, reqId: 0,
 };
@@ -18,14 +19,35 @@ const S = {
 const pad = n => String(n).padStart(2, '0');
 const ymd = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parse = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const md = s => { const d = parse(s); return `${d.getMonth() + 1}/${d.getDate()}(${WD[d.getDay()]})`; };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hm = t => (t ? String(t).slice(0, 5) : '');
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
 const shareUrl = token => `${location.origin}${location.pathname}?g=${token}`;
+const newToken = () => crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
 function fmtWhen(iso) { if (!iso) return ''; const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function timeText(e) { const a = hm(e.start_time), b = hm(e.end_time); return a && b ? `${a} – ${b}` : a ? `${a}~` : b ? `~${b}` : '종일'; }
 function gridRange() { const first = new Date(S.y, S.m, 1); const a = new Date(first); a.setDate(1 - first.getDay()); const b = new Date(a); b.setDate(a.getDate() + 41); return [a, b]; }
+
+// 링크 규칙: 이 날짜가 링크에 포함되는지
+function linkMatch(l, day) {
+  if (!l) return true;
+  if (l.kind === 'all') return true;
+  if (l.kind === 'weekdays') return (l.weekdays || []).includes(parse(day).getDay());
+  if (l.kind === 'dates') return (l.dates || []).includes(day);
+  return false;
+}
+function linkDesc(l) {
+  if (l.kind === 'all') return '모든 일정';
+  if (l.kind === 'weekdays') {
+    const w = [...(l.weekdays || [])].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));   // 월~일 순
+    return w.length ? `매주 ${w.map(i => WD[i]).join('·')}` : '요일 없음';
+  }
+  const d = [...(l.dates || [])].sort();
+  if (!d.length) return '날짜 없음';
+  return d.slice(0, 5).map(md).join(', ') + (d.length > 5 ? ` 외 ${d.length - 5}일` : '');
+}
 
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2400); }
@@ -38,7 +60,7 @@ function modal({ title, text = '', html = '', buttons = [], onMount }) {
     ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h3>${esc(title)}</h3>${text ? `<p class="mtext">${esc(text)}</p>` : ''}<div class="mbody">${html}</div><div class="mbtns"></div></div>`;
     const box = $('.mbtns', ov);
     const close = v => { ov.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
-    const onKey = e => { if (e.key === 'Escape') close(undefined); };
+    const onKey = e => { if (e.key === 'Escape' && ov === document.querySelector('.ov:last-of-type')) close(undefined); };
     for (const b of buttons) {
       const el = document.createElement('button');
       el.type = 'button'; el.className = 'btn ' + (b.cls || ''); el.textContent = b.label;
@@ -125,35 +147,33 @@ async function onLogin(e) {
 
 /* ---------- 대표 모드 ---------- */
 async function startOwner(user) {
-  S.mode = 'owner'; S.user = user; S.token = null;
+  S.mode = 'owner'; S.user = user; S.token = null; S.link = null;
   document.body.className = 'owner';
   show('main');
   $('#brandTitle').textContent = '팀 캘린더';
   $('#brandSub').textContent = user.email;
-  $('#brandDot').style.background = 'var(--primary)';
   const ok = await reload();
   if (!ok) return;
   const pending = lsGet('tc.pendingCompany');
   if (pending && !S.company) { await sb.from('cal_settings').upsert({ owner: user.id, company: pending }); lsSet('tc.pendingCompany', null); S.company = pending; }
-  if (!S.groups.length) {
-    await sb.from('cal_groups').insert([{ name: '정규직', color: COLORS[0] }, { name: '주말 알바', color: COLORS[2] }]);
-    await reload();
-    toast('기본 그룹 “정규직”, “주말 알바”를 만들었어요');
+  if (!S.links.length && !lsGet('tc.linksInit.' + user.id)) {
+    const { error } = await sb.from('cal_links').insert({ name: '전체 일정', kind: 'all' });
+    if (!error) { lsSet('tc.linksInit.' + user.id, '1'); await reload(); toast('“전체 일정” 공유 링크를 만들었어요'); }
   }
   subscribe('cal-owner-' + user.id);
 }
 
 async function loadOwner() {
   const [a, b] = gridRange();
-  const [g, e, s] = await Promise.all([
-    sb.from('cal_groups').select('*').order('created_at'),
+  const [l, e, s] = await Promise.all([
+    sb.from('cal_links').select('*').order('created_at'),
     sb.from('cal_events').select('*').gte('day', ymd(a)).lte('day', ymd(b))
       .order('day').order('start_time', { nullsFirst: true }).order('created_at'),
     sb.from('cal_settings').select('company').maybeSingle(),
   ]);
-  const err = g.error || e.error || s.error;
+  const err = l.error || e.error || s.error;
   if (err) throw err;
-  return { groups: g.data, events: e.data, company: s.data?.company || '' };
+  return { links: l.data, events: e.data, company: s.data?.company || '' };
 }
 
 /* ---------- 직원 모드 ---------- */
@@ -163,7 +183,15 @@ async function startMember(token) {
   show('main');
   updateNameBtn();
   const ok = await reload();
-  if (ok) subscribe('cal-' + token);
+  if (!ok) return;
+  // 날짜 선택 링크: 오늘이 포함 안 되면 가장 가까운 공유 날짜로 이동
+  if (S.link.kind === 'dates' && S.link.dates.length && !S.link.dates.includes(S.sel)) {
+    const ds = [...S.link.dates].sort(), today = ymd(new Date());
+    const target = ds.find(d => d >= today) || ds[ds.length - 1];
+    const d = parse(target); S.sel = target;
+    if (d.getFullYear() !== S.y || d.getMonth() !== S.m) { S.y = d.getFullYear(); S.m = d.getMonth(); await reload(); } else render();
+  }
+  subscribe('cal-' + token);
 }
 
 async function loadMember() {
@@ -181,7 +209,7 @@ async function askName(first) {
     title: first ? '이름을 알려주세요' : '내 이름',
     text: '완료 체크할 때 누가 했는지 함께 표시돼요. 이 기기에만 저장됩니다.',
     html: `<label>이름<input id="nm" maxlength="30" value="${esc(cur)}" placeholder="예: 김민수"></label>`,
-    buttons: [{ label: first ? '건너뛰기' : '취소', value: null }, { label: '저장', cls: 'primary', run: ov => { lsSet(NAME_KEY, $('#nm', ov).value.trim() || null); } , value: 'saved' }],
+    buttons: [{ label: first ? '건너뛰기' : '취소', value: null }, { label: '저장', cls: 'primary', value: 'saved', run: ov => { lsSet(NAME_KEY, $('#nm', ov).value.trim() || null); } }],
     onMount: ov => { const i = $('#nm', ov); i.focus(); i.addEventListener('keydown', e => { if (e.key === 'Enter') $('.btn.primary', ov).click(); }); },
   });
   S.askedName = true; updateNameBtn();
@@ -195,9 +223,9 @@ async function reload() {
     if (S.mode === 'owner') {
       const r = await loadOwner();
       if (id !== S.reqId) return true;
-      S.groups = r.groups; S.events = r.events; S.company = r.company;
+      S.links = r.links; S.events = r.events; S.company = r.company;
       $('#brandTitle').textContent = S.company || '팀 캘린더';
-      if (S.filter !== 'all' && S.filter !== 'none' && !S.groups.some(g => g.id === S.filter)) S.filter = 'all';
+      if (S.filter !== 'all' && !S.links.some(l => l.id === S.filter)) S.filter = 'all';
     } else if (S.mode === 'member') {
       const r = await loadMember();
       if (id !== S.reqId) return true;
@@ -206,11 +234,10 @@ async function reload() {
         notice('🔒', '링크를 열 수 없어요', '링크가 바뀌었거나 삭제되었어요. 대표님께 새 링크를 받아주세요.', { label: '대표 로그인', run: showLogin });
         return false;
       }
-      S.group = r.group; S.company = r.company; S.events = r.events;
-      $('#brandTitle').textContent = `${r.group.name} 일정`;
-      $('#brandSub').textContent = r.company || '';
-      $('#brandDot').style.background = r.group.color;
-      document.title = `${r.group.name} 일정 · ${r.company || '팀 캘린더'}`;
+      S.link = r.link; S.company = r.company; S.events = r.events;
+      $('#brandTitle').textContent = r.link.name;
+      $('#brandSub').textContent = [r.company, linkDesc(r.link)].filter(Boolean).join(' · ');
+      document.title = `${r.link.name} · ${r.company || '팀 캘린더'}`;
     } else return false;
     render();
     return true;
@@ -222,9 +249,9 @@ async function reload() {
       return false;
     }
     if (/JWT|session/i.test(m) && S.mode === 'owner') { await sb.auth.signOut(); showLogin(); return false; }
-    if (!S.events.length && !$('#grid').children.length) render();
+    render();
     toast('불러오기 실패 — 인터넷 연결을 확인하세요');
-    return S.mode != null;
+    return S.mode === 'owner' || !!S.link;
   }
 }
 
@@ -255,67 +282,65 @@ window.addEventListener('online', () => S.mode && scheduleReload(0));
 setInterval(() => { if (!document.hidden && S.mode) reload(); }, 30000);
 
 /* ---------- 그리기 ---------- */
-function groupById(id) { return S.groups.find(g => g.id === id); }
-function evColor(e) {
-  if (S.mode === 'member') return S.group?.color || 'var(--primary)';
-  const g = (e.group_ids || []).map(groupById).find(Boolean);
-  return g ? g.color : '#94a3b8';
-}
-function visibleEvents() {
-  if (S.mode !== 'owner' || S.filter === 'all') return S.events;
-  if (S.filter === 'none') return S.events.filter(e => !(e.group_ids || []).some(groupById));
-  return S.events.filter(e => (e.group_ids || []).includes(S.filter));
-}
+// 지금 화면에 적용되는 링크 규칙 (직원: 받은 링크, 대표: 미리보기로 고른 링크)
+function activeLink() { return S.mode === 'member' ? S.link : S.links.find(l => l.id === S.filter) || null; }
+function visibleEvents() { const l = activeLink(); return l ? S.events.filter(e => linkMatch(l, e.day)) : S.events; }
 
 function render() { renderFilters(); renderCal(); renderDay(); }
 
 function renderFilters() {
   if (S.mode !== 'owner') return;
-  const items = [{ id: 'all', name: '전체', color: 'var(--text)' }, ...S.groups.map(g => ({ id: g.id, name: g.name, color: g.color }))];
-  if (S.events.some(e => !(e.group_ids || []).some(groupById))) items.push({ id: 'none', name: '공유 안 함', color: '#94a3b8' });
-  $('#filters').innerHTML = items.map(i =>
-    `<button class="fchip ${S.filter === i.id ? 'on' : ''}" data-f="${i.id}" style="--c:${i.color}">${i.id === 'all' ? '' : '<i></i>'}${esc(i.name)}</button>`).join('');
+  const items = [{ id: 'all', name: '내 전체 일정' }, ...S.links.map(l => ({ id: l.id, name: `${KIND_ICON[l.kind]} ${l.name}` }))];
+  $('#filters').innerHTML = (S.links.length ? '<span class="flabel">직원 화면 미리보기</span>' : '') +
+    items.map(i => `<button class="fchip ${S.filter === i.id ? 'on' : ''}" data-f="${i.id}">${esc(i.name)}</button>`).join('');
 }
 
 function renderCal() {
   $('#monthLabel').textContent = `${S.y}년 ${S.m + 1}월`;
-  const [start] = gridRange(), today = ymd(new Date());
+  const [start] = gridRange(), today = ymd(new Date()), l = activeLink();
   const byDay = {};
   for (const e of visibleEvents()) (byDay[e.day] ||= []).push(e);
   let html = '';
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const k = ymd(d), evs = byDay[k] || [], done = evs.filter(e => e.done).length;
-    const cls = ['cell', d.getMonth() !== S.m && 'out', k === today && 'today', k === S.sel && 'sel', d.getDay() === 0 && 'sun', d.getDay() === 6 && 'sat'].filter(Boolean).join(' ');
+    const cls = ['cell', d.getMonth() !== S.m && 'out', l && !linkMatch(l, k) && 'off', l && l.kind !== 'all' && linkMatch(l, k) && 'shared',
+      k === today && 'today', k === S.sel && 'sel', d.getDay() === 0 && 'sun', d.getDay() === 6 && 'sat'].filter(Boolean).join(' ');
     html += `<button class="${cls}" data-day="${k}" aria-label="${d.getMonth() + 1}월 ${d.getDate()}일 일정 ${evs.length}개">
       <span class="num">${d.getDate()}</span>
       ${evs.length ? `<span class="cnt ${done === evs.length ? 'all' : ''}">${done}/${evs.length}</span>` : ''}
-      <span class="chips">${evs.slice(0, 3).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${esc(e.title)}</span>`).join('')}
+      <span class="chips">${evs.slice(0, 3).map(e => `<span class="chip ${e.done ? 'done' : ''}">${esc(e.title)}</span>`).join('')}
       ${evs.length > 3 ? `<span class="more">+${evs.length - 3}</span>` : ''}</span></button>`;
   }
   $('#grid').innerHTML = html;
 }
 
 function renderDay() {
-  const d = parse(S.sel);
+  const d = parse(S.sel), l = activeLink();
   $('#dayTitle').textContent = `${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`;
   const evs = visibleEvents().filter(e => e.day === S.sel);
   const done = evs.filter(e => e.done).length;
   $('#dayCount').textContent = evs.length ? `완료 ${done}/${evs.length}` : '';
   const owner = S.mode === 'owner';
+  const shareTags = e => {
+    const ls = S.links.filter(x => linkMatch(x, e.day));
+    return ls.length ? ls.map(x => `<span class="tag">${KIND_ICON[x.kind]} ${esc(x.name)}</span>`).join('') : '<span class="tag">🔒 공유 안 됨</span>';
+  };
   $('#dayList').innerHTML = evs.length ? evs.map(e => {
-    const tags = owner ? (e.group_ids || []).map(groupById).filter(Boolean).map(g => `<span class="tag" style="--c:${g.color}"><i></i>${esc(g.name)}</span>`).join('') || '<span class="tag">🔒 공유 안 함</span>' : '';
     const dm = e.done ? `<span class="donemark">✓ 완료${e.done_by ? ' · ' + esc(e.done_by) : ''}${e.done_at ? ' · ' + fmtWhen(e.done_at) : ''}</span>` : '';
-    return `<div class="ev ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">
+    const tags = owner ? shareTags(e) : '';
+    return `<div class="ev ${e.done ? 'done' : ''}">
       <button class="check ${e.done ? 'on' : ''}" data-check="${e.id}" aria-pressed="${e.done}" aria-label="${e.done ? '완료 취소' : '완료 체크'}" ${S.busy.has(e.id) ? 'disabled' : ''}>✓</button>
       <${owner ? 'button' : 'div'} class="body ${owner ? 'edit' : ''}" ${owner ? `data-edit="${e.id}" type="button"` : ''}>
         <div class="time">${timeText(e)}</div>
         <div class="t">${esc(e.title)}</div>
         ${e.memo ? `<div class="memo">${esc(e.memo)}</div>` : ''}
-        ${tags || dm ? `<div class="meta">${tags}${dm}</div>` : ''}
+        ${tags || dm ? `<div class="meta">${dm}${tags}</div>` : ''}
       </${owner ? 'button' : 'div'}>
     </div>`;
-  }).join('') : `<div class="empty">${owner ? '일정이 없어요. “+ 일정”으로 추가하세요.' : '이 날은 일정이 없어요.'}</div>`;
+  }).join('') : `<div class="empty">${
+      l && !linkMatch(l, S.sel) ? (owner ? `이 날은 “${esc(l.name)}” 링크에 포함되지 않아요.` : '이 날은 공유된 일정이 없어요.')
+      : owner ? '일정이 없어요. “+ 일정”으로 추가하세요.' : '이 날은 일정이 없어요.'}</div>`;
 }
 
 /* ---------- 완료 체크 ---------- */
@@ -351,7 +376,6 @@ async function toggleDone(id) {
 /* ---------- 일정 편집 (대표) ---------- */
 async function editEvent(id) {
   const e = id ? S.events.find(x => x.id === id) : null;
-  const gids = e ? e.group_ids || [] : (S.filter !== 'all' && S.filter !== 'none' ? [S.filter] : S.groups.map(g => g.id));
   const html = `
     <label>일정 제목<input id="f_title" maxlength="100" required value="${esc(e?.title)}" placeholder="예: 매장 오픈 준비"></label>
     <label>날짜<input id="f_day" type="date" required value="${e?.day || S.sel}"></label>
@@ -360,8 +384,11 @@ async function editEvent(id) {
       <label>종료 (선택)<input id="f_et" type="time" value="${hm(e?.end_time)}"></label>
     </div>
     <label>메모 (선택)<textarea id="f_memo" rows="3" maxlength="1000" placeholder="준비물, 장소 등">${esc(e?.memo)}</textarea></label>
-    <div class="fieldlabel">누구에게 보여줄까요?</div>
-    <div class="gpick">${S.groups.map(g => `<label style="--c:${g.color}"><input type="checkbox" value="${g.id}" ${gids.includes(g.id) ? 'checked' : ''}>${esc(g.name)}</label>`).join('') || '<span class="fieldlabel">먼저 “공유 링크”에서 그룹을 만드세요.</span>'}</div>`;
+    <p class="fieldlabel" id="f_share"></p>`;
+  const showShare = ov => {
+    const day = $('#f_day', ov).value, ls = day ? S.links.filter(l => linkMatch(l, day)) : [];
+    $('#f_share', ov).textContent = !day ? '' : ls.length ? `이 날짜 일정이 보이는 링크: ${ls.map(l => l.name).join(', ')}` : '이 날짜는 어떤 공유 링크에도 포함되지 않아요 (대표만 보임)';
+  };
   const save = async ov => {
     const title = $('#f_title', ov).value.trim(), day = $('#f_day', ov).value;
     if (!title) { $('#f_title', ov).focus(); toast('제목을 입력하세요'); return false; }
@@ -369,7 +396,6 @@ async function editEvent(id) {
     const row = {
       title, day, memo: $('#f_memo', ov).value.trim(),
       start_time: $('#f_st', ov).value || null, end_time: $('#f_et', ov).value || null,
-      group_ids: [...ov.querySelectorAll('.gpick input:checked')].map(i => i.value),
       updated_at: new Date().toISOString(),
     };
     const q = e ? sb.from('cal_events').update(row).eq('id', e.id) : sb.from('cal_events').insert(row);
@@ -387,53 +413,61 @@ async function editEvent(id) {
     await reload(); toast('삭제했어요');
   } });
   buttons.push({ label: '취소', value: null }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
-  await modal({ title: e ? '일정 수정' : '새 일정', html, buttons, onMount: ov => { if (!e) $('#f_title', ov).focus(); } });
+  await modal({ title: e ? '일정 수정' : '새 일정', html, buttons, onMount: ov => {
+    showShare(ov); $('#f_day', ov).addEventListener('change', () => showShare(ov));
+    if (!e) $('#f_title', ov).focus();
+  } });
 }
 
-/* ---------- 그룹·공유 링크 (대표) ---------- */
-async function openGroups() {
+/* ---------- 공유 링크 (대표) ---------- */
+async function openLinks() {
   await modal({
     title: '공유 링크',
-    text: '그룹마다 링크가 따로 있어요. 링크를 받은 직원은 그 그룹 일정만 보고, 완료 체크만 할 수 있어요.',
-    html: `<div class="glist" id="glist"></div><div style="margin-top:12px"><button class="btn wide" id="gadd">+ 그룹 추가</button></div>`,
+    text: '링크를 받은 직원은 일정을 보기만 하고, 완료 체크만 할 수 있어요.',
+    html: `<div class="addrow">
+        <button class="btn" data-new="all">📋 전체 일정</button>
+        <button class="btn" data-new="weekdays">🔁 요일별</button>
+        <button class="btn" data-new="dates">📌 날짜 선택</button>
+      </div>
+      <div class="glist" id="glist"></div>`,
     buttons: [{ label: '닫기', cls: 'primary' }],
     onMount: ov => {
       const draw = () => {
-        $('#glist', ov).innerHTML = S.groups.map(g => `
-          <div class="gitem" style="--c:${g.color}">
-            <div class="gname">${esc(g.name)}</div>
-            <div class="glink">${esc(shareUrl(g.token))}</div>
+        $('#glist', ov).innerHTML = S.links.map(l => `
+          <div class="gitem">
+            <div class="gtop"><span class="kind">${KIND_ICON[l.kind]} ${KIND_LABEL[l.kind]}</span><span class="gname">${esc(l.name)}</span></div>
+            <div class="gdesc">${esc(linkDesc(l))}</div>
+            <div class="glink">${esc(shareUrl(l.token))}</div>
             <div class="gbtns">
-              <button class="btn sm primary" data-a="copy" data-id="${g.id}">링크 복사</button>
-              ${navigator.share ? `<button class="btn sm" data-a="share" data-id="${g.id}">보내기</button>` : ''}
-              <button class="btn sm" data-a="edit" data-id="${g.id}">이름·색</button>
-              <button class="btn sm" data-a="regen" data-id="${g.id}">링크 새로 만들기</button>
-              <button class="btn sm danger" data-a="del" data-id="${g.id}">삭제</button>
+              <button class="btn sm primary" data-a="copy" data-id="${l.id}">링크 복사</button>
+              ${navigator.share ? `<button class="btn sm" data-a="share" data-id="${l.id}">보내기</button>` : ''}
+              <button class="btn sm" data-a="edit" data-id="${l.id}">수정</button>
+              <button class="btn sm" data-a="regen" data-id="${l.id}">링크 새로 만들기</button>
+              <button class="btn sm danger" data-a="del" data-id="${l.id}">삭제</button>
             </div>
-          </div>`).join('') || '<div class="empty">그룹이 없어요.</div>';
+          </div>`).join('') || '<div class="empty">위 버튼으로 공유 링크를 만드세요.</div>';
       };
       draw();
-      $('#gadd', ov).onclick = async () => { if (await editGroup()) draw(); };
+      ov.querySelectorAll('[data-new]').forEach(b => b.onclick = async () => { if (await editLink(null, b.dataset.new)) draw(); });
       $('#glist', ov).onclick = async ev => {
         const b = ev.target.closest('button[data-a]'); if (!b) return;
-        const g = groupById(b.dataset.id); if (!g) return;
-        const url = shareUrl(g.token), a = b.dataset.a;
+        const l = S.links.find(x => x.id === b.dataset.id); if (!l) return;
+        const url = shareUrl(l.token), a = b.dataset.a;
         if (a === 'copy') {
           try { await navigator.clipboard.writeText(url); toast('링크를 복사했어요. 카톡 등에 붙여넣으세요'); }
           catch { window.prompt('아래 링크를 복사하세요', url); }
         } else if (a === 'share') {
-          navigator.share({ title: `${g.name} 일정`, text: `${S.company || '회사'} ${g.name} 일정표입니다.`, url }).catch(() => {});
+          navigator.share({ title: l.name, text: `${S.company ? S.company + ' ' : ''}${l.name} (${linkDesc(l)})`, url }).catch(() => {});
         } else if (a === 'edit') {
-          if (await editGroup(g)) draw();
+          if (await editLink(l)) draw();
         } else if (a === 'regen') {
-          if (!(await confirmBox('링크를 새로 만들까요?', `“${g.name}”의 기존 링크는 더 이상 열리지 않아요. 새 링크를 다시 보내줘야 합니다.`, '새로 만들기', '취소', true))) return;
-          const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-          const { error } = await sb.from('cal_groups').update({ token }).eq('id', g.id);
+          if (!(await confirmBox('링크를 새로 만들까요?', `“${l.name}”의 기존 링크는 더 이상 열리지 않아요. 새 링크를 다시 보내줘야 합니다.`, '새로 만들기', '취소', true))) return;
+          const { error } = await sb.from('cal_links').update({ token: newToken() }).eq('id', l.id);
           if (error) return toast('실패: ' + error.message);
           await reload(); draw(); toast('새 링크를 만들었어요');
         } else if (a === 'del') {
-          if (!(await confirmBox('그룹을 삭제할까요?', `“${g.name}” 링크가 사라지고, 일정은 남지만 이 그룹에는 더 이상 공유되지 않아요.`, '삭제', '취소', true))) return;
-          const { error } = await sb.from('cal_groups').delete().eq('id', g.id);
+          if (!(await confirmBox('링크를 삭제할까요?', `“${l.name}” 링크로는 더 이상 볼 수 없어요. 일정은 그대로 남아요.`, '삭제', '취소', true))) return;
+          const { error } = await sb.from('cal_links').delete().eq('id', l.id);
           if (error) return toast('실패: ' + error.message);
           await reload(); draw(); toast('삭제했어요');
         }
@@ -442,24 +476,72 @@ async function openGroups() {
   });
 }
 
-async function editGroup(g) {
-  let color = g?.color || COLORS[S.groups.length % COLORS.length];
+async function editLink(l, kind0) {
+  let kind = l?.kind || kind0 || 'all';
+  const wd = new Set(l?.weekdays || (kind === 'weekdays' ? [6, 0] : []));
+  const dates = new Set(l?.dates || (kind === 'dates' ? [S.sel] : []));
+  const first = [...dates].sort()[0];
+  let py = first ? parse(first).getFullYear() : S.y, pm = first ? parse(first).getMonth() : S.m;
+  const defName = { all: '전체 일정', weekdays: '주말 일정', dates: '선택한 날짜 일정' };
+  let nameTouched = !!l;
+
   const r = await modal({
-    title: g ? '그룹 수정' : '새 그룹',
-    html: `<label>그룹 이름<input id="g_name" maxlength="30" value="${esc(g?.name)}" placeholder="예: 평일 알바, 매니저"></label>
-      <div class="fieldlabel">색상</div>
-      <div class="colors">${COLORS.map(c => `<button type="button" style="--c:${c}" data-c="${c}" class="${c === color ? 'on' : ''}" aria-label="색 ${c}"></button>`).join('')}</div>`,
+    title: l ? '공유 링크 수정' : '새 공유 링크',
+    html: `<div class="seg" id="l_kind">${['all', 'weekdays', 'dates'].map(k => `<button type="button" data-k="${k}">${KIND_ICON[k]} ${KIND_LABEL[k]}</button>`).join('')}</div>
+      <label>링크 이름 (직원 화면 제목)<input id="l_name" maxlength="30" value="${esc(l?.name || defName[kind])}"></label>
+      <div id="p_all" class="fieldlabel">모든 날짜의 일정이 보여요.</div>
+      <div id="p_weekdays"><div class="fieldlabel">보여줄 요일 (매주 반복)</div>
+        <div class="wdays">${[1, 2, 3, 4, 5, 6, 0].map(i => `<button type="button" data-w="${i}" class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${WD[i]}</button>`).join('')}</div>
+        <div class="quick"><button type="button" class="btn sm" data-q="weekend">주말</button><button type="button" class="btn sm" data-q="weekday">평일</button><button type="button" class="btn sm" data-q="clear">지우기</button></div>
+      </div>
+      <div id="p_dates"><div class="fieldlabel">보여줄 날짜를 누르세요 (여러 개 선택 가능)</div>
+        <div class="mini">
+          <div class="mini-bar"><button type="button" class="btn ghost icon" data-mm="-1">‹</button><b id="mini_label"></b><button type="button" class="btn ghost icon" data-mm="1">›</button></div>
+          <div class="mini-dow">${WD.map(w => `<span>${w}</span>`).join('')}</div>
+          <div class="mini-grid" id="mini_grid"></div>
+        </div>
+        <div class="picked" id="picked"></div>
+      </div>`,
     buttons: [{ label: '취소', value: false }, { label: '저장', cls: 'primary', value: true, run: async ov => {
-      const name = $('#g_name', ov).value.trim();
-      if (!name) { toast('이름을 입력하세요'); return false; }
-      const q = g ? sb.from('cal_groups').update({ name, color }).eq('id', g.id) : sb.from('cal_groups').insert({ name, color });
-      const { error } = await q;
+      const name = $('#l_name', ov).value.trim();
+      if (!name) { toast('링크 이름을 입력하세요'); return false; }
+      if (kind === 'weekdays' && !wd.size) { toast('요일을 하나 이상 고르세요'); return false; }
+      if (kind === 'dates' && !dates.size) { toast('날짜를 하나 이상 고르세요'); return false; }
+      const row = { name, kind, weekdays: kind === 'weekdays' ? [...wd].sort() : [], dates: kind === 'dates' ? [...dates].sort() : [] };
+      const { error } = l ? await sb.from('cal_links').update(row).eq('id', l.id) : await sb.from('cal_links').insert(row);
       if (error) { toast('저장 실패: ' + error.message); return false; }
-      await reload();
+      await reload(); toast(l ? '수정했어요' : '링크를 만들었어요. “링크 복사”로 보내세요');
     } }],
     onMount: ov => {
-      $('#g_name', ov).focus();
-      $('.colors', ov).onclick = e => { const b = e.target.closest('[data-c]'); if (!b) return; color = b.dataset.c; ov.querySelectorAll('.colors button').forEach(x => x.classList.toggle('on', x === b)); };
+      const nameEl = $('#l_name', ov);
+      nameEl.addEventListener('input', () => { nameTouched = true; });
+      const drawKind = () => {
+        ov.querySelectorAll('#l_kind button').forEach(b => b.classList.toggle('on', b.dataset.k === kind));
+        for (const k of ['all', 'weekdays', 'dates']) $('#p_' + k, ov).hidden = k !== kind;
+        if (!nameTouched) nameEl.value = defName[kind];
+      };
+      const drawWd = () => ov.querySelectorAll('[data-w]').forEach(b => b.classList.toggle('on', wd.has(+b.dataset.w)));
+      const drawMini = () => {
+        $('#mini_label', ov).textContent = `${py}년 ${pm + 1}월`;
+        const f = new Date(py, pm, 1), start = new Date(f); start.setDate(1 - f.getDay());
+        const today = ymd(new Date());
+        let h = '';
+        for (let i = 0; i < 42; i++) {
+          const d = new Date(start); d.setDate(start.getDate() + i); const k = ymd(d);
+          const has = S.events.some(e => e.day === k);
+          h += `<button type="button" data-d="${k}" class="${[d.getMonth() !== pm && 'out', dates.has(k) && 'on', k === today && 'today', has && 'has'].filter(Boolean).join(' ')}">${d.getDate()}</button>`;
+        }
+        $('#mini_grid', ov).innerHTML = h;
+        const ds = [...dates].sort();
+        $('#picked', ov).innerHTML = ds.length ? `<span class="fieldlabel">${ds.length}일 선택</span>` + ds.map(k => `<button type="button" class="pchip" data-x="${k}">${md(k)} ✕</button>`).join('') : '<span class="fieldlabel">선택한 날짜가 없어요</span>';
+      };
+      $('#l_kind', ov).onclick = e => { const b = e.target.closest('[data-k]'); if (!b) return; kind = b.dataset.k; if (kind === 'weekdays' && !wd.size) { wd.add(6); wd.add(0); drawWd(); } if (kind === 'dates' && !dates.size) { dates.add(S.sel); drawMini(); } drawKind(); };
+      $('.wdays', ov).onclick = e => { const b = e.target.closest('[data-w]'); if (!b) return; const w = +b.dataset.w; wd.has(w) ? wd.delete(w) : wd.add(w); drawWd(); };
+      $('.quick', ov).onclick = e => { const q = e.target.closest('[data-q]')?.dataset.q; if (!q) return; wd.clear(); if (q === 'weekend') [6, 0].forEach(x => wd.add(x)); if (q === 'weekday') [1, 2, 3, 4, 5].forEach(x => wd.add(x)); drawWd(); };
+      $('.mini-bar', ov).onclick = e => { const b = e.target.closest('[data-mm]'); if (!b) return; pm += +b.dataset.mm; if (pm < 0) { pm = 11; py--; } if (pm > 11) { pm = 0; py++; } drawMini(); };
+      $('#mini_grid', ov).onclick = e => { const b = e.target.closest('[data-d]'); if (!b) return; const k = b.dataset.d; dates.has(k) ? dates.delete(k) : dates.add(k); drawMini(); };
+      $('#picked', ov).onclick = e => { const b = e.target.closest('[data-x]'); if (!b) return; dates.delete(b.dataset.x); drawMini(); };
+      drawKind(); drawWd(); drawMini();
     },
   });
   return r === true;
@@ -507,13 +589,11 @@ function bindUI() {
   };
   $('#filters').onclick = e => { const b = e.target.closest('[data-f]'); if (!b) return; S.filter = b.dataset.f; render(); };
   $('#btnAdd').onclick = () => editEvent(null);
-  $('#btnGroups').onclick = openGroups;
+  $('#btnGroups').onclick = openLinks;
   $('#btnSettings').onclick = openSettings;
   $('#btnName').onclick = () => askName(false);
   $('#btnOwnerLogin').onclick = showLogin;
-  sb.auth.onAuthStateChange((ev, session) => {
-    if (ev === 'SIGNED_OUT' && S.mode === 'owner') showLogin();
-  });
+  sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT' && S.mode === 'owner') showLogin(); });
 }
 
 if ('serviceWorker' in navigator && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
