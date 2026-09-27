@@ -327,3 +327,17 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .recrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 10px; font-size: 14px; }
 .recrow .ok { color: var(--ok); } .recrow .warn { color: var(--danger); }
 .helpbtn { display: block; text-align: center; text-decoration: none; margin: 12px 0 8px; line-height: 24px; }
+
+/* ---- 검색 ---- */
+.searchbox { width: 100%; font-size: 17px; padding: 12px 14px; border: 1.5px solid var(--primary); border-radius: 12px; background: var(--bg); color: var(--text); }
+.sresults { display: flex; flex-direction: column; gap: 4px; max-height: 58vh; overflow: auto; margin-top: 4px; }
+.shead { font-size: 12px; font-weight: 700; color: var(--muted); margin: 8px 2px 2px; }
+.srow { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 10px; background: var(--card); padding: 8px 10px; }
+.srow:hover { background: var(--soft); }
+.srow .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.srow .sd { flex: none; font-size: 12px; color: var(--muted); min-width: 64px; }
+.srow .sbody { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.srow .t { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow .sm { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.srow mark { background: #fde047; color: #111; border-radius: 3px; padding: 0 1px; }
+@media (max-width: 420px) { .live b { display: none; } .top-actions .btn.ghost:not(.icon) { padding: 8px 8px; } }

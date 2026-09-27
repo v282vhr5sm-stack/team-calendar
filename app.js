@@ -92,31 +92,53 @@ window.addEventListener('popstate', () => {
 ['pointerup', 'touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, armBack, true));
 
 /* ---------- 모달 ---------- */
-function modal({ title, text = '', html = '', buttons = [], onMount }) {
+function modal({ title, text = '', html = '', buttons = [], onMount, protect = true }) {
   return new Promise(resolve => {
     const ov = document.createElement('div');
     ov.className = 'ov';
     ov.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h3>${esc(title)}</h3>${text ? `<p class="mtext">${esc(text)}</p>` : ''}<div class="mbody">${html}</div><div class="mbtns"></div></div>`;
     const box = $('.mbtns', ov);
+    let dirty = false, asking = false;
     const close = v => {
       if (!ov.isConnected) return;
       ov.remove(); document.removeEventListener('keydown', onKey);
-      const i = modalStack.indexOf(close); if (i >= 0) modalStack.splice(i, 1);
+      const i = modalStack.indexOf(soft); if (i >= 0) modalStack.splice(i, 1);
       resolve(v);
     };
-    modalStack.push(close);
+    // 버튼이 아닌 방법(바깥 누르기·뒤로가기·Esc·취소)으로 닫을 때: 입력한 게 있으면 먼저 물어봄
+    const soft = async v => {
+      if (!ov.isConnected || asking) return;
+      if (protect && dirty) {
+        asking = true;
+        const ok = await confirmBox('작성 중인 내용이 있어요', '지금 닫으면 입력한 내용이 저장되지 않아요. 닫을까요?', '저장 안 하고 닫기', '계속 작성', true);
+        asking = false;
+        if (!ok) return;
+      }
+      close(v);
+    };
+    ov.addEventListener('input', () => { dirty = true; });
+    ov.addEventListener('click', e => { if (e.target.closest('.catpick, .colors, .wdays, .mini-grid, .seg, .quick')) dirty = true; });
+    modalStack.push(soft);
     armBack();
-    const onKey = e => { if (e.key === 'Escape' && ov === document.querySelector('.ov:last-of-type')) close(undefined); };
+    const onKey = e => { if (e.key === 'Escape' && ov === document.querySelector('.ov:last-of-type')) soft(undefined); };
     for (const b of buttons) {
       const el = document.createElement('button');
       el.type = 'button'; el.className = 'btn ' + (b.cls || ''); el.textContent = b.label;
       el.onclick = async () => {
-        if (b.run) { el.disabled = true; let r; try { r = await b.run(ov); } finally { el.disabled = false; } if (r === false) return; }
+        if (b.soft) return soft(b.value);
+        if (b.run) {
+          if (el.disabled) return;   // 두 번 눌러도 한 번만 실행
+          el.disabled = true; let r;
+          try { r = await b.run(ov); }
+          catch (err) { console.error(err); toast('처리하지 못했어요 — 입력한 내용은 그대로 있어요. 다시 눌러주세요'); r = false; }
+          finally { el.disabled = false; }
+          if (r === false) return;
+        }
         close(b.value);
       };
       box.appendChild(el);
     }
-    ov.addEventListener('click', e => { if (e.target === ov) close(undefined); });
+    ov.addEventListener('click', e => { if (e.target === ov) soft(undefined); });
     document.addEventListener('keydown', onKey);
     document.body.appendChild(ov);
     onMount && onMount(ov, close);
@@ -565,6 +587,10 @@ async function toggleDone(id) {
 /* ---------- 일정 편집 (대표) ---------- */
 async function editEvent(id) {
   const e = id ? S.events.find(x => x.id === id) : null;
+  // 작성 중 내용은 폰에 계속 임시 저장 → 앱이 꺼져도 다시 열면 이어서 작성
+  const draftKey = 'tc.draft.' + (e ? e.id : 'new.' + S.sel);
+  let draft = null; try { draft = JSON.parse(lsGet(draftKey) || 'null'); } catch {}
+  const newId = draft?.newId || (e ? null : crypto.randomUUID());   // 새 일정 id를 미리 정해두면 다시 눌러도 두 번 생기지 않음
   let catId = e ? e.category_id : (catById(lsGet(CAT_KEY)) ? lsGet(CAT_KEY) : S.cats[0]?.id) || null;
   const catButtons = () => S.cats.map(c => `<button type="button" style="--c:${c.color}" data-cat="${c.id}" class="${c.id === catId ? 'on' : ''}"><i></i>${esc(c.name)}</button>`).join('');
   const html = `
@@ -578,7 +604,10 @@ async function editEvent(id) {
     const day = e ? $('#f_day', ov).value : S.sel, ls = day ? S.links.filter(l => linkMatch(l, day)) : [];
     $('#f_share', ov).textContent = !day ? '' : ls.length ? `이 날짜 일정이 보이는 링크: ${ls.map(l => l.name).join(', ')}` : '이 날짜는 어떤 공유 링크에도 포함되지 않아요 (대표만 보임)';
   };
+  const saveDraft = ov => lsSet(draftKey, JSON.stringify({
+    newId, title: $('#f_title', ov).value, memo: $('#f_memo', ov).value, catId, day: e ? $('#f_day', ov).value : S.sel, at: Date.now() }));
   const save = async ov => {
+    saveDraft(ov);
     const title = $('#f_title', ov).value.trim(), day = e ? $('#f_day', ov).value : S.sel;
     if (!title) { $('#f_title', ov).focus(); toast('제목을 입력하세요'); return false; }
     if (!day) { toast('날짜를 선택하세요'); return false; }
@@ -587,9 +616,15 @@ async function editEvent(id) {
       start_time: null, end_time: null,
       updated_at: new Date().toISOString(),
     };
-    const q = e ? sb.from('cal_events').update(row).eq('id', e.id) : sb.from('cal_events').insert(row);
+    const q = e ? sb.from('cal_events').update(row).eq('id', e.id)
+                : sb.from('cal_events').upsert({ ...row, id: newId }, { onConflict: 'id', ignoreDuplicates: true });
     const { error } = await q;
-    if (error) { console.error(error); toast('저장 실패: ' + error.message); return false; }
+    if (error) {
+      console.error(error);
+      toast(/fetch|network|Failed/i.test(error.message || '') ? '인터넷 연결이 불안정해요. 입력한 내용은 그대로 있어요 — 다시 저장을 눌러주세요' : '저장 실패: ' + error.message);
+      return false;
+    }
+    lsSet(draftKey, null);   // 저장 성공 → 임시 저장 삭제
     S.sel = day; const d = parse(day); S.y = d.getFullYear(); S.m = d.getMonth();
     await reload();
     toast(e ? '수정했어요' : '일정을 추가했어요');
@@ -602,8 +637,19 @@ async function editEvent(id) {
     await reload(); toast('삭제했어요');
   } });
   if (e) buttons.push({ label: '📄 복사', value: 'copy' });
-  buttons.push({ label: '취소', value: null }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
+  buttons.push({ label: '취소', value: null, soft: true }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
   const res = await modal({ title: e ? '일정 수정' : `${parse(S.sel).getMonth() + 1}월 ${parse(S.sel).getDate()}일 (${WD[parse(S.sel).getDay()]}) 일정 추가`, html, buttons, onMount: ov => {
+    // 이어서 작성할 내용이 있으면 불러오기
+    if (draft && (draft.title || draft.memo) && (draft.title !== (e?.title || '') || draft.memo !== (e?.memo || '') || (e && draft.day !== e.day))) {
+      $('#f_title', ov).value = draft.title || '';
+      $('#f_memo', ov).value = draft.memo || '';
+      if (e && draft.day) $('#f_day', ov).value = draft.day;
+      if (draft.catId && catById(draft.catId)) { catId = draft.catId; $('#f_cats', ov).innerHTML = catButtons(); }
+      ov.dispatchEvent(new Event('input'));
+      toast('작성 중이던 내용을 불러왔어요');
+    }
+    ov.addEventListener('input', () => saveDraft(ov));
+    ov.addEventListener('click', () => setTimeout(() => ov.isConnected && saveDraft(ov), 0));
     showShare(ov); e && $('#f_day', ov).addEventListener('change', () => showShare(ov));
     $('#f_cats', ov).onclick = ev => {
       const b = ev.target.closest('[data-cat]'); if (!b) return;
@@ -613,6 +659,7 @@ async function editEvent(id) {
     $('#f_cats_edit', ov).onclick = async () => { await openCategories(); $('#f_cats', ov).innerHTML = catButtons(); };
     if (!e) $('#f_title', ov).focus();
   } });
+  if (res === undefined || res === null) lsSet(draftKey, null);   // 확인하고 닫은 경우만 임시 저장 삭제
   if (res === 'copy') copyEvent(e);
 }
 
@@ -883,6 +930,77 @@ async function openSettings() {
   });
 }
 
+/* ---------- 일정 검색 (대표, 전체 기간) ---------- */
+async function searchEvents(q) {
+  const pat = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+  const low = q.toLowerCase();
+  const catIds = S.cats.filter(c => c.name.toLowerCase().includes(low)).map(c => c.id);
+  const cols = 'id, title, memo, day, category_id, color, done, done_by, done_at';
+  const qs = [
+    sb.from('cal_events').select(cols).ilike('title', pat).order('day', { ascending: false }).limit(300),
+    sb.from('cal_events').select(cols).ilike('memo', pat).order('day', { ascending: false }).limit(300),
+  ];
+  if (catIds.length) qs.push(sb.from('cal_events').select(cols).in('category_id', catIds).order('day', { ascending: false }).limit(300));
+  const rs = await Promise.all(qs);
+  const err = rs.find(r => r.error)?.error; if (err) throw err;
+  const map = new Map(); rs.forEach(r => r.data.forEach(e => map.set(e.id, e)));
+  return [...map.values()];
+}
+function hl(text, q) {   // 검색어 부분 강조 (안전하게 글자 단위로 처리)
+  const t = String(text || ''), i = t.toLowerCase().indexOf(q.toLowerCase());
+  return i < 0 ? esc(t) : esc(t.slice(0, i)) + '<mark>' + esc(t.slice(i, i + q.length)) + '</mark>' + esc(t.slice(i + q.length));
+}
+async function openSearch() {
+  let timer, seq = 0;
+  await modal({
+    title: '🔍 일정 검색',
+    protect: false,
+    html: `<input id="q" class="searchbox" type="search" enterkeyhint="search" placeholder="제목·메모·분류로 찾기" autocomplete="off">
+      <p class="fieldlabel" id="q_info">저장된 모든 일정에서 찾아요</p>
+      <div class="sresults" id="q_list"></div>`,
+    buttons: [{ label: '닫기', cls: 'primary' }],
+    onMount: (ov, close) => {
+      const input = $('#q', ov), info = $('#q_info', ov), list = $('#q_list', ov);
+      input.value = S.lastQuery || '';
+      const run = async () => {
+        const q = input.value.trim(); S.lastQuery = q;
+        const my = ++seq;
+        if (!q) { list.innerHTML = ''; info.textContent = '저장된 모든 일정에서 찾아요'; return; }
+        info.textContent = '찾는 중…';
+        let res;
+        try { res = await searchEvents(q); } catch (err) { console.error(err); if (my === seq) info.textContent = '검색하지 못했어요 — 인터넷 연결을 확인하고 다시 입력해 보세요'; return; }
+        if (my !== seq) return;   // 더 최근 검색이 있으면 무시
+        const today = ymd(new Date());
+        const next = res.filter(e => e.day >= today).sort((a, b) => a.day.localeCompare(b.day) || a.title.localeCompare(b.title));
+        const past = res.filter(e => e.day < today).sort((a, b) => b.day.localeCompare(a.day) || a.title.localeCompare(b.title));
+        info.textContent = res.length ? `${res.length}개 찾았어요${res.length >= 300 ? ' (많아서 일부만 보여요)' : ''}` : '찾는 일정이 없어요';
+        const row = e => {
+          const cat = catById(e.category_id);
+          const memoHit = e.memo && e.memo.toLowerCase().includes(q.toLowerCase());
+          return `<button type="button" class="srow" data-day="${e.day}" style="--c:${evColor(e)}">
+            <i class="dot"></i><span class="sd">${e.day.slice(0, 4) !== today.slice(0, 4) ? e.day.slice(2, 4) + '년 ' : ''}${md(e.day)}</span>
+            <span class="sbody"><span class="t">${e.done ? STAR : ''}${hl(e.title, q)}</span>
+            ${memoHit ? `<span class="sm">${hl(e.memo, q)}</span>` : cat ? `<span class="sm">${hl(cat.name, q)}</span>` : ''}</span></button>`;
+        };
+        list.innerHTML = (next.length ? `<div class="shead">다가오는 일정</div>${next.map(row).join('')}` : '')
+                       + (past.length ? `<div class="shead">지난 일정</div>${past.map(row).join('')}` : '');
+      };
+      input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(timer); run(); input.blur(); } });
+      list.onclick = e => {
+        const b = e.target.closest('[data-day]'); if (!b) return;
+        const k = b.dataset.day, d = parse(k);
+        close();
+        S.sel = k;
+        if (d.getFullYear() !== S.y || d.getMonth() !== S.m) { S.y = d.getFullYear(); S.m = d.getMonth(); goMonth(0); } else render();
+        setTimeout(() => $('.day').scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+      };
+      setTimeout(() => input.focus(), 50);
+      if (input.value) run();
+    },
+  });
+}
+
 /* ---------- 백업·복원 (대표) ---------- */
 async function fetchAll() {
   const [e, c, l, st] = await Promise.all([
@@ -1034,6 +1152,7 @@ function bindUI() {
   $('#btnAdd').onclick = () => editEvent(null);
   $('#btnGroups').onclick = openLinks;
   $('#btnSettings').onclick = openSettings;
+  $('#btnSearch').onclick = openSearch;
   $('#btnName').onclick = () => askName(false);
   $('#btnOwnerLogin').onclick = showLogin;
   $('#forgotPw').onclick = forgotPassword;
