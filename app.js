@@ -504,6 +504,12 @@ setInterval(() => { if (!document.hidden && canPoll()) reload(); }, 30000);
 function activeLink() { return S.mode === 'member' ? S.link : S.links.find(l => l.id === S.filter) || null; }
 function visibleEvents() { const l = activeLink(); return l ? S.events.filter(e => linkMatch(l, e.day)) : S.events; }
 
+// 하루 안에서 보여줄 순서: 아직 안 한 일정(대표가 정한 순서) 위, 완료한 일정은 아래로 — 먼저 체크한 것부터
+function dayOrder(evs) {
+  const open = evs.filter(e => !e.done);
+  const done = evs.filter(e => e.done).sort((a, b) => String(a.done_at || '').localeCompare(String(b.done_at || '')));
+  return [...open, ...done];
+}
 function render() { renderFilters(); renderCal(); renderDay(); $('#legend').innerHTML = legendHtml(); }
 
 function renderFilters() {
@@ -518,6 +524,7 @@ function renderCal() {
   const [start] = gridRange(), today = ymd(new Date()), l = activeLink();
   const byDay = {};
   for (const e of visibleEvents()) (byDay[e.day] ||= []).push(e);
+  for (const k in byDay) byDay[k] = dayOrder(byDay[k]);
   let html = '';
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
@@ -536,11 +543,11 @@ function renderCal() {
 function renderDay() {
   const d = parse(S.sel), l = activeLink();
   $('#dayTitle').textContent = `${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`;
-  const evs = visibleEvents().filter(e => e.day === S.sel);
+  const evs = dayOrder(visibleEvents().filter(e => e.day === S.sel));
   const done = evs.filter(e => e.done).length;
   $('#dayCount').textContent = evs.length ? `완료 ${done}/${evs.length}` : '';
   const owner = S.mode === 'owner';
-  const canDrag = owner && !l && evs.length > 1;
+  const canDrag = owner && !l && evs.filter(e => !e.done).length > 1;
   $('#dayList').innerHTML = evs.length ? evs.map(e => {
     const who = e.done ? [e.done_by, e.done_at && fmtWhen(e.done_at)].filter(Boolean).map(esc).join(' · ') || '완료' : '';
     const cat = catById(e.category_id);
@@ -550,7 +557,7 @@ function renderDay() {
         <i class="dot"></i><span class="t">${esc(e.title)}</span>${e.memo ? '<span class="has-memo">📝</span>' : ''}
         ${who ? `<span class="who">${who}</span>` : ''}
       </button>
-      ${canDrag ? '<span class="grip" data-grip role="button" aria-label="끌어서 순서 바꾸기" title="끌어서 순서 바꾸기"><i></i><i></i><i></i></span>' : ''}
+      ${canDrag && !e.done ? '<span class="grip" data-grip role="button" aria-label="끌어서 순서 바꾸기" title="끌어서 순서 바꾸기"><i></i><i></i><i></i></span>' : ''}
     </div>`;
   }).join('') : `<div class="empty">${
       l && !linkMatch(l, S.sel) ? (owner ? `이 날은 “${esc(l.name)}” 링크에 포함되지 않아요.` : '이 날은 공유된 일정이 없어요.')
@@ -566,7 +573,7 @@ function setupReorder() {
     const grip = e.target.closest('[data-grip]');
     if (!grip || S.mode !== 'owner' || dragging) return;
     e.preventDefault();
-    const row = grip.closest('.ev'), before = [...list.querySelectorAll('.ev')].map(r => r.dataset.id);
+    const row = grip.closest('.ev'), before = [...list.querySelectorAll('.ev:not(.done)')].map(r => r.dataset.id);
     let startY = e.clientY, lastY = e.clientY;
     dragging = true;
     row.classList.add('dragging');
@@ -574,11 +581,11 @@ function setupReorder() {
     const place = () => {
       row.style.transform = `translateY(${lastY - startY}px)`;
       const prev = row.previousElementSibling, next = row.nextElementSibling;
-      if (next && next.classList.contains('ev')) {
+      if (next && next.classList.contains('ev') && !next.classList.contains('done')) {
         const r = next.getBoundingClientRect();
         if (lastY > r.top + r.height / 2) { const t = row.offsetTop; list.insertBefore(next, row); startY += row.offsetTop - t; return place(); }
       }
-      if (prev && prev.classList.contains('ev')) {
+      if (prev && prev.classList.contains('ev') && !prev.classList.contains('done')) {
         const r = prev.getBoundingClientRect();
         if (lastY < r.top + r.height / 2) { const t = row.offsetTop; list.insertBefore(row, prev); startY += row.offsetTop - t; return place(); }
       }
@@ -599,7 +606,7 @@ function setupReorder() {
       grip.removeEventListener('pointercancel', end);
       row.classList.remove('dragging'); row.style.transform = '';
       dragging = false;
-      const after = [...list.querySelectorAll('.ev')].map(r => r.dataset.id);
+      const after = [...list.querySelectorAll('.ev:not(.done)')].map(r => r.dataset.id);
       if (after.join() !== before.join()) saveOrder(after);
     };
     grip.addEventListener('pointermove', move);
