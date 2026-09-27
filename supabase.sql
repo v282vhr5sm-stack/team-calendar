@@ -135,7 +135,7 @@ begin
       select jsonb_agg(jsonb_build_object(
         'id', e.id, 'title', e.title, 'memo', e.memo, 'day', e.day, 'color', coalesce(c.color, e.color), 'category_id', e.category_id,
         'done', e.done, 'done_by', e.done_by, 'done_at', e.done_at)
-        order by e.day, e.created_at)
+        order by e.day, e.sort nulls last, e.created_at)
       from public.cal_events e left join public.cal_categories c on c.id = e.category_id
       where e.owner = l.owner and e.day between p_from and p_to
         and public.cal_link_match(l.kind, l.weekdays, l.dates, e.day)), '[]'::jsonb));
@@ -326,3 +326,26 @@ begin
 end $$;
 revoke all on function public.cal_reset_password(text, text, text) from public;
 grant execute on function public.cal_reset_password(text, text, text) to anon, authenticated;
+
+-- 8) 하루 일정 순서 (대표가 끌어서 바꿈). 비어 있으면 만든 순서대로 맨 뒤 ------------------
+alter table public.cal_events add column if not exists sort int;
+
+-- 여러 일정의 순서를 한 번에 저장 (본인 일정만, 순서 칸만 바꿈)
+create or replace function public.cal_reorder(p_ids uuid[])
+returns void language sql security invoker set search_path = public as $$
+  update public.cal_events e set sort = x.ord
+  from unnest(p_ids) with ordinality as x(id, ord)
+  where e.id = x.id and e.owner = auth.uid() and e.sort is distinct from x.ord;
+$$;
+revoke all on function public.cal_reorder(uuid[]) from public, anon;
+grant execute on function public.cal_reorder(uuid[]) to authenticated;
+
+-- 순서만 바뀐 경우는 수정 기록(안전망)에 남기지 않음
+create or replace function public.cal_history_log()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'UPDATE' and (to_jsonb(new) - 'sort' - 'updated_at') = (to_jsonb(old) - 'sort' - 'updated_at') then return null; end if;
+  insert into public.cal_history (owner, tbl, op, row_id, data)
+  values (old.owner, tg_table_name, tg_op, old.id, to_jsonb(old) - 'pin_hash');
+  return null;
+end $$;
