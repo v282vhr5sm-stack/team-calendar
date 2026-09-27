@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>팀 캘린더</title>
+<meta name="theme-color" content="#2563eb">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <!-- 로그인 -->
+  <section id="login" class="login" hidden>
+    <div class="login-card">
+      <div class="logo">📅</div>
+      <h1>팀 캘린더</h1>
+      <p class="sub">대표 계정으로 로그인해 일정을 만들고, 직원에게 링크로 공유하세요.</p>
+      <div class="tabs">
+        <button type="button" data-tab="in" class="on">로그인</button>
+        <button type="button" data-tab="up">계정 만들기</button>
+      </div>
+      <form id="loginForm">
+        <label class="only-up" hidden>회사 이름<input name="company" autocomplete="organization" placeholder="예: 공간건축디자인"></label>
+        <label>이메일<input name="email" type="email" required autocomplete="email"></label>
+        <label>비밀번호<input name="password" type="password" required minlength="6" autocomplete="current-password"></label>
+        <button class="btn primary wide" type="submit">로그인</button>
+        <p class="msg" id="loginMsg"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- 캘린더 -->
+  <section id="main" hidden>
+    <header class="top">
+      <div class="brand">
+        <span class="dot-color" id="brandDot"></span>
+        <div>
+          <div class="brand-title" id="brandTitle">팀 캘린더</div>
+          <div class="brand-sub" id="brandSub"></div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="live" id="live" title="실시간 연결 상태"><i></i><b>연결 중</b></span>
+        <button class="btn ghost owner-only" id="btnGroups">👥 공유 링크</button>
+        <button class="btn ghost owner-only icon" id="btnSettings" aria-label="설정">⚙️</button>
+        <button class="btn ghost member-only" id="btnName">이름</button>
+      </div>
+    </header>
+
+    <div class="filters owner-only" id="filters"></div>
+
+    <div class="layout">
+      <div class="cal">
+        <div class="month-bar">
+          <button class="btn ghost icon" id="prev" aria-label="이전 달">‹</button>
+          <h2 id="monthLabel"></h2>
+          <button class="btn ghost icon" id="next" aria-label="다음 달">›</button>
+          <button class="btn ghost" id="today">오늘</button>
+        </div>
+        <div class="dow"><span class="sun">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span class="sat">토</span></div>
+        <div class="grid" id="grid"></div>
+      </div>
+
+      <aside class="day">
+        <div class="day-head">
+          <h3 id="dayTitle"></h3>
+          <span class="day-count" id="dayCount"></span>
+          <button class="btn primary owner-only" id="btnAdd">+ 일정</button>
+        </div>
+        <div id="dayList" class="day-list"></div>
+        <p class="hint member-only">완료한 일정은 체크하세요. 체크를 취소하려면 한 번 더 확인합니다.</p>
+      </aside>
+    </div>
+
+    <footer class="foot">
+      <button class="linkbtn member-only" id="btnOwnerLogin">대표 로그인</button>
+    </footer>
+  </section>
+
+  <section id="notice" class="notice" hidden></section>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
