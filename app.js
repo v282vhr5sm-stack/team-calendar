@@ -16,6 +16,7 @@ const COLORS = [
   ['#9333ea', '보라'], ['#0891b2', '청록'], ['#db2777', '분홍'], ['#64748b', '회색'],
 ];
 const CAT_KEY = 'tc.lastCat';
+const CHIP_MAX = 4;   // 달력 한 칸에 보여줄 일정 줄 수 (넘치면 오른쪽 위에 +N)
 // 달력의 완료 표시: 검은 테두리 노란 별
 const STAR = '<svg class="star" viewBox="0 0 24 24" aria-label="완료"><path d="M12 2.2l2.95 6.1 6.7.9-4.9 4.65 1.25 6.65L12 17.3l-6 3.2 1.25-6.65L2.35 9.2l6.7-.9z" fill="#facc15" stroke="#000" stroke-width="2.2" stroke-linejoin="round"/></svg>';
 // 처음 쓸 때 넣어두는 기본 분류 (설정 > 분류 관리에서 자유롭게 수정)
@@ -533,9 +534,8 @@ function renderCal() {
       k === today && 'today', k === S.sel && 'sel', d.getDay() === 0 && 'sun', d.getDay() === 6 && 'sat'].filter(Boolean).join(' ');
     html += `<button class="${cls}" data-day="${k}" aria-label="${d.getMonth() + 1}월 ${d.getDate()}일 일정 ${evs.length}개">
       <span class="num">${d.getDate()}</span>
-      ${evs.length ? `<span class="cnt ${done === evs.length ? 'all' : ''}">${done}/${evs.length}</span>` : ''}
-      <span class="chips">${evs.slice(0, 3).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${e.done ? STAR : ''}${esc(e.title)}</span>`).join('')}
-      ${evs.length > 3 ? `<span class="more">+${evs.length - 3}</span>` : ''}</span></button>`;
+      ${evs.length > CHIP_MAX ? `<span class="cnt more-n">+${evs.length - CHIP_MAX}</span>` : ''}
+      <span class="chips">${evs.slice(0, CHIP_MAX).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${e.done ? STAR : ''}${esc(e.title)}</span>`).join('')}</span></button>`;
   }
   $('#grid').innerHTML = html;
 }

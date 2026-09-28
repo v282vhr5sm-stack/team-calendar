@@ -348,3 +348,28 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .grip:hover, .grip:active { background: var(--soft); }
 .ev.dragging { position: relative; z-index: 5; box-shadow: 0 10px 28px rgba(0,0,0,.22); opacity: .96; cursor: grabbing; transition: none; }
 .ev { transition: box-shadow .15s; }
+
+/* ===== 달력: 칸마다 구분선 + 폰에서는 화면 끝까지 꽉 차게 ===== */
+.grid { gap: 0; border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.cell { border-radius: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.cell:hover { background: color-mix(in srgb, var(--primary) 5%, transparent); }
+.cell.sel { background: color-mix(in srgb, var(--primary) 8%, transparent); outline: 2px solid var(--primary); outline-offset: -2px; }
+.cell.out { opacity: .55; }
+.dow { background: var(--bg); border-top: 1px solid var(--line); padding: 5px 0; font-weight: 600; }
+.cnt.more-n { top: 4px; right: 3px; font-size: 11px; font-weight: 700; color: var(--primary); }
+.chips { gap: 2px; }
+@media (max-width: 699px) {
+  .layout { padding: 0 0 16px; gap: 10px; }
+  .cal { border-radius: 0; box-shadow: none; padding: 0; background: var(--card); }
+  .month-bar { padding: 6px 8px 6px 12px; }
+  .dow { font-size: 13px; }
+  .grid { border-left: 0; }
+  .cell:nth-child(7n) { border-right: 0; }
+  .cell { min-height: 100px; padding: 2px 1px 3px; gap: 2px; }
+  .cell .num { width: 22px; height: 22px; font-size: 14px; margin-left: 2px; }
+  .chip { font-size: 11.5px; line-height: 1.45; padding: 0 2px; border-radius: 2px; font-weight: 700; }
+  .star { width: 1.3em; height: 1.3em; vertical-align: -0.3em; margin-right: 1px; }
+  .catlegend { padding: 8px 12px 6px; }
+  .day { margin: 0 10px; }
+  .filters { padding: 8px 12px 0; }
+}
