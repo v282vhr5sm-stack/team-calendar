@@ -16,7 +16,7 @@ const COLORS = [
   ['#9333ea', '보라'], ['#0891b2', '청록'], ['#db2777', '분홍'], ['#64748b', '회색'],
 ];
 const CAT_KEY = 'tc.lastCat';
-const CHIP_MAX = 4;   // 달력 한 칸에 보여줄 일정 줄 수 (넘치면 오른쪽 위에 +N)
+let CHIP_MAX = 4;   // 달력 한 칸에 보여줄 일정 줄 수 (폰에서는 칸 높이에 맞춰 자동 계산, 넘치면 오른쪽 위에 +N)
 // 달력의 완료 표시: 검은 테두리 노란 별
 const STAR = '<svg class="star" viewBox="0 0 24 24" aria-label="완료"><path d="M12 2.2l2.95 6.1 6.7.9-4.9 4.65 1.25 6.65L12 17.3l-6 3.2 1.25-6.65L2.35 9.2l6.7-.9z" fill="#facc15" stroke="#000" stroke-width="2.2" stroke-linejoin="round"/></svg>';
 // 처음 쓸 때 넣어두는 기본 분류 (설정 > 분류 관리에서 자유롭게 수정)
@@ -498,6 +498,7 @@ function stopRealtime() { if (S.ch) { sb.removeChannel(S.ch); S.ch = null; } }
 const canPoll = () => S.mode && S.gate !== 'pin' && S.gate !== 'badpin';   // PIN 입력 중에는 화면을 건드리지 않음
 document.addEventListener('visibilitychange', () => { if (!document.hidden && canPoll()) scheduleReload(0); });
 window.addEventListener('online', () => canPoll() && scheduleReload(0));
+let fitT; window.addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(() => { if (S.mode && !dragging) renderCal(); }, 150); });
 setInterval(() => { if (!document.hidden && canPoll()) reload(); }, 30000);
 
 /* ---------- 그리기 ---------- */
@@ -511,7 +512,7 @@ function dayOrder(evs) {
   const done = evs.filter(e => e.done).sort((a, b) => String(a.done_at || '').localeCompare(String(b.done_at || '')));
   return [...open, ...done];
 }
-function render() { renderFilters(); renderCal(); renderDay(); $('#legend').innerHTML = legendHtml(); }
+function render() { renderFilters(); $('#legend').innerHTML = legendHtml(); renderCal(); renderDay(); }
 
 function renderFilters() {
   if (S.mode !== 'owner') return;
@@ -520,6 +521,18 @@ function renderFilters() {
     items.map(i => `<button class="fchip ${S.filter === i.id ? 'on' : ''}" data-f="${i.id}">${esc(i.name)}</button>`).join('');
 }
 
+// 폰: 한 달 달력이 화면 한 페이지 안에 들어오도록 달력 높이와 칸당 줄 수를 계산
+function fitCalendar(weeks) {
+  const cal = $('.cal'), grid = $('#grid');
+  if (window.innerWidth >= 700 || $('#main').hidden) { cal.style.height = ''; grid.style.gridTemplateRows = ''; CHIP_MAX = 4; return; }
+  const top = cal.getBoundingClientRect().top + window.scrollY;           // 페이지 맨 위에서 달력이 시작하는 위치
+  const h = Math.max(430, Math.floor(window.innerHeight - top));          // 화면 아래 끝까지
+  cal.style.height = h + 'px';
+  const head = $('.month-bar').offsetHeight + $('.dow').offsetHeight + ($('#legend').offsetHeight || 0);
+  const rowH = (h - head - 1) / weeks;
+  grid.style.gridTemplateRows = `repeat(${weeks}, minmax(0, 1fr))`;
+  CHIP_MAX = Math.max(1, Math.floor((rowH - 26) / 18.5));                 // 날짜 숫자 줄을 빼고 들어가는 일정 줄 수
+}
 function renderCal() {
   $('#monthLabel').textContent = `${S.y}년 ${S.m + 1}월`;
   const [start] = gridRange(), today = ymd(new Date()), l = activeLink();
@@ -527,7 +540,10 @@ function renderCal() {
   for (const e of visibleEvents()) (byDay[e.day] ||= []).push(e);
   for (const k in byDay) byDay[k] = dayOrder(byDay[k]);
   let html = '';
-  for (let i = 0; i < 42; i++) {
+  // 그 달에 필요한 주만 (4~6주)
+  const weeks = Math.ceil((new Date(S.y, S.m, 1).getDay() + new Date(S.y, S.m + 1, 0).getDate()) / 7);
+  fitCalendar(weeks);
+  for (let i = 0; i < weeks * 7; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const k = ymd(d), evs = byDay[k] || [], done = evs.filter(e => e.done).length;
     const cls = ['cell', d.getMonth() !== S.m && 'out', l && !linkMatch(l, k) && 'off', l && l.kind !== 'all' && linkMatch(l, k) && 'shared',

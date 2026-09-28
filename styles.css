@@ -373,3 +373,12 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .day { margin: 0 10px; }
   .filters { padding: 8px 12px 0; }
 }
+
+/* ===== 폰: 한 달 달력을 화면 한 페이지에 (높이는 app.js fitCalendar가 계산) ===== */
+@media (max-width: 699px) {
+  .cal { display: flex; flex-direction: column; overflow: hidden; }
+  .cal .grid { flex: 1; min-height: 0; }
+  .cell { min-height: 0; overflow: hidden; padding-top: 1px; }
+  .cell .num { height: 20px; font-size: 13px; }
+  .chip { line-height: 1.4; }
+}
