@@ -1218,11 +1218,15 @@ function bindUI() {
   cal.addEventListener('touchstart', e => { const t = e.touches[0]; sx = t.clientX; sy = t.clientY; swiped = false; }, { passive: true });
   cal.addEventListener('touchend', e => {
     const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
-    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    const horiz = Math.abs(dx) >= 50 && Math.abs(dx) >= Math.abs(dy) * 1.5;
+    // 폰: 달력 칸 위에서 위아래로 밀어도 달 넘기기 (손가락 위로 = 다음 달, 아래로 = 이전 달)
+    const vert = window.innerWidth < 700 && e.target.closest('#grid') && Math.abs(dy) >= 50 && Math.abs(dy) >= Math.abs(dx) * 1.5;
+    if (!horiz && !vert) return;
     swiped = true; setTimeout(() => { swiped = false; }, 400);
-    const dir = dx < 0 ? 1 : -1;
+    const dir = horiz ? (dx < 0 ? 1 : -1) : (dy < 0 ? 1 : -1);
     goMonth(dir);
-    const g = $('#grid'); g.classList.remove('slide-l', 'slide-r'); void g.offsetWidth; g.classList.add(dir > 0 ? 'slide-l' : 'slide-r');
+    const g = $('#grid'); g.classList.remove('slide-l', 'slide-r', 'slide-u', 'slide-d'); void g.offsetWidth;
+    g.classList.add(horiz ? (dir > 0 ? 'slide-l' : 'slide-r') : (dir > 0 ? 'slide-u' : 'slide-d'));
   }, { passive: true });
   $('#grid').onclick = e => {
     const c = e.target.closest('[data-day]'); if (!c) return;

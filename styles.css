@@ -382,3 +382,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .cell .num { height: 20px; font-size: 13px; }
   .chip { line-height: 1.4; }
 }
+
+/* 폰: 달력 칸 위에서 위아래로 밀면 달 넘기기 (페이지 스크롤 대신) */
+@media (max-width: 699px) { .cal .grid { touch-action: none; } }
+.grid.slide-u { animation: slideU .22s ease-out; }
+.grid.slide-d { animation: slideD .22s ease-out; }
+@keyframes slideU { from { transform: translateY(40px); opacity: .3; } }
+@keyframes slideD { from { transform: translateY(-40px); opacity: .3; } }
