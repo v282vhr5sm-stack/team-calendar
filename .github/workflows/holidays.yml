@@ -1,0 +1,32 @@
+# 매주 월요일 대한민국 공휴일 목록(holidays.json)을 구글 캘린더에서 새로 받아옴 (임시공휴일·선거일 반영)
+name: holidays
+
+on:
+  schedule:
+    - cron: "40 0 * * 1"     # 매주 월요일 (한국 시간 오전 9시 40분쯤)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 공휴일 목록 갱신
+        run: node tools/holidays.cjs
+      - name: 바뀌었으면 저장
+        run: |
+          if ! git diff --quiet -- holidays.json; then
+            git config user.name "holidays-bot"
+            git config user.email "holidays-bot@users.noreply.github.com"
+            git add holidays.json
+            git commit -m "공휴일 목록 갱신 $(date -u +%Y-%m-%d)"
+            git push
+          else
+            echo "변경 없음"
+          fi

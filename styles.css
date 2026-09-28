@@ -382,3 +382,9 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .cell .num { height: 20px; font-size: 13px; }
   .chip { line-height: 1.4; }
 }
+
+/* 공휴일: 달력 숫자 빨간색, 하루 일정표 날짜 뒤에 이름 */
+.cell.hol .num { color: var(--sun); }
+.cell.hol.today .num { color: #fff; background: var(--sun); }
+.holname { color: var(--sun); font-size: 14px; font-weight: 700; margin-left: 4px; }
+.day-head h3 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }

@@ -16,6 +16,7 @@ const COLORS = [
   ['#9333ea', '보라'], ['#0891b2', '청록'], ['#db2777', '분홍'], ['#64748b', '회색'],
 ];
 const CAT_KEY = 'tc.lastCat';
+let HOL = {};        // 대한민국 공휴일 { 'YYYY-MM-DD': '추석' } — holidays.json (매주 자동 갱신)
 let CHIP_MAX = 4;   // 달력 한 칸에 보여줄 일정 줄 수 (폰에서는 칸 높이에 맞춰 자동 계산, 넘치면 오른쪽 위에 +N)
 // 달력의 완료 표시: 검은 테두리 노란 별
 const STAR = '<svg class="star" viewBox="0 0 24 24" aria-label="완료"><path d="M12 2.2l2.95 6.1 6.7.9-4.9 4.65 1.25 6.65L12 17.3l-6 3.2 1.25-6.65L2.35 9.2l6.7-.9z" fill="#facc15" stroke="#000" stroke-width="2.2" stroke-linejoin="round"/></svg>';
@@ -149,7 +150,13 @@ const confirmBox = (title, text, yes = '확인', no = '취소', danger = false) 
   modal({ title, text, buttons: [{ label: no, value: false }, { label: yes, value: true, cls: danger ? 'danger fill' : 'primary' }] }).then(v => v === true);
 
 /* ---------- 시작 ---------- */
+// 공휴일 목록 불러오기 (실패해도 달력은 그대로 동작)
+function loadHolidays() {
+  fetch('holidays.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null)
+    .then(j => { if (j && j.days) { HOL = j.days; if (S.mode && !$('#main').hidden) render(); } }).catch(() => {});
+}
 async function boot() {
+  loadHolidays();
   const now = new Date(); S.y = now.getFullYear(); S.m = now.getMonth(); S.sel = ymd(now);
   bindUI();
   const t = new URLSearchParams(location.search).get('g');
@@ -547,7 +554,7 @@ function renderCal() {
     const d = new Date(start); d.setDate(start.getDate() + i);
     const k = ymd(d), evs = byDay[k] || [], done = evs.filter(e => e.done).length;
     const cls = ['cell', d.getMonth() !== S.m && 'out', l && !linkMatch(l, k) && 'off', l && l.kind !== 'all' && linkMatch(l, k) && 'shared',
-      k === today && 'today', k === S.sel && 'sel', d.getDay() === 0 && 'sun', d.getDay() === 6 && 'sat'].filter(Boolean).join(' ');
+      k === today && 'today', k === S.sel && 'sel', HOL[k] && 'hol', d.getDay() === 0 && 'sun', d.getDay() === 6 && 'sat'].filter(Boolean).join(' ');
     html += `<button class="${cls}" data-day="${k}" aria-label="${d.getMonth() + 1}월 ${d.getDate()}일 일정 ${evs.length}개">
       <span class="num">${d.getDate()}</span>
       ${evs.length > CHIP_MAX ? `<span class="cnt more-n">+${evs.length - CHIP_MAX}</span>` : ''}
@@ -558,7 +565,7 @@ function renderCal() {
 
 function renderDay() {
   const d = parse(S.sel), l = activeLink();
-  $('#dayTitle').textContent = `${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`;
+  $('#dayTitle').innerHTML = esc(`${d.getMonth() + 1}월 ${d.getDate()}일 (${WD[d.getDay()]})`) + (HOL[S.sel] ? ` <span class="holname">${esc(HOL[S.sel])}</span>` : '');
   const evs = dayOrder(visibleEvents().filter(e => e.day === S.sel));
   const done = evs.filter(e => e.done).length;
   $('#dayCount').textContent = evs.length ? `완료 ${done}/${evs.length}` : '';
