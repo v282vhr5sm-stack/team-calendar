@@ -440,7 +440,6 @@ async function reload() {
       if (id !== S.reqId) return true;
       S.links = r.links; S.events = r.events; S.company = r.company; S.cats = r.cats; S.catsInit = r.catsInit; S.hasRecovery = r.hasRecovery;
       $('#brandTitle').textContent = S.company || '팀 캘린더';
-      if (S.filter !== 'all' && !S.links.some(l => l.id === S.filter)) S.filter = 'all';
     } else if (S.mode === 'member') {
       const r = await loadMember();
       if (id !== S.reqId) return true;
@@ -510,7 +509,8 @@ setInterval(() => { if (!document.hidden && canPoll()) reload(); }, 30000);
 
 /* ---------- 그리기 ---------- */
 // 지금 화면에 적용되는 링크 규칙 (직원: 받은 링크, 대표: 미리보기로 고른 링크)
-function activeLink() { return S.mode === 'member' ? S.link : S.links.find(l => l.id === S.filter) || null; }
+// 직원(링크): 받은 링크 규칙대로 거름. 대표: 항상 전체 일정 (미리보기는 제목만 직원용으로)
+function activeLink() { return S.mode === 'member' ? S.link : null; }
 function visibleEvents() { const l = activeLink(); return l ? S.events.filter(e => linkMatch(l, e.day)) : S.events; }
 
 // 하루 안에서 보여줄 순서: 아직 안 한 일정(대표가 정한 순서) 위, 완료한 일정은 아래로 — 먼저 체크한 것부터
@@ -521,17 +521,13 @@ function dayOrder(evs) {
 }
 // 화면에 보여줄 일정 제목: 직원(링크)과 대표의 "직원 화면 미리보기"에서는 직원용 제목
 const staffTitle = e => (e.staff_title && e.staff_title.trim()) || e.title;
-const showTitle = e => (S.mode === 'owner' && activeLink() ? staffTitle(e) : e.title);
+const showTitle = e => (S.mode === 'owner' && S.preview ? staffTitle(e) : e.title);
 function render() { renderFilters(); $('#legend').innerHTML = legendHtml(); renderCal(); renderDay(); }
 
 function renderFilters() {
   if (S.mode !== 'owner') return;
-  const items = [{ id: 'all', name: '내 전체 일정' }, ...S.links.map(l => ({ id: l.id, name: `${KIND_ICON[l.kind]} ${l.name}` }))];
-  $('#filters').innerHTML = (S.links.length ? '<span class="flabel">👀 직원 화면 미리보기</span>' : '') +
-    items.map(i => `<button class="fchip ${S.filter === i.id ? 'on' : ''}" data-f="${i.id}">${esc(i.name)}</button>`).join('') +
-    (activeLink() ? '<div class="preview-note">지금 직원에게 보이는 화면이에요 (직원용 제목). “내 전체 일정”을 누르면 돌아가요.</div>' : '');
+  $('#filters').innerHTML = `<button class="fchip preview-btn ${S.preview ? 'on' : ''}" data-preview aria-pressed="${!!S.preview}">${S.preview ? '👀 직원 화면 보는 중 · 누르면 돌아가기' : '👀 직원 화면 미리보기'}</button>`;
 }
-
 // 폰: 한 달 달력이 화면 한 페이지 안에 들어오도록 달력 높이와 칸당 줄 수를 계산
 function fitCalendar(weeks) {
   const cal = $('.cal'), grid = $('#grid');
@@ -574,14 +570,14 @@ function renderDay() {
   const done = evs.filter(e => e.done).length;
   $('#dayCount').textContent = evs.length ? `완료 ${done}/${evs.length}` : '';
   const owner = S.mode === 'owner';
-  const canDrag = owner && !l && evs.filter(e => !e.done).length > 1;
+  const canDrag = owner && !S.preview && evs.filter(e => !e.done).length > 1;
   $('#dayList').innerHTML = evs.length ? evs.map(e => {
     const who = e.done ? [e.done_by, e.done_at && fmtWhen(e.done_at)].filter(Boolean).map(esc).join(' · ') || '완료' : '';
     const cat = catById(e.category_id);
     return `<div class="ev ${e.done ? 'done' : ''}" data-id="${e.id}" style="--c:${evColor(e)}">
       <button class="check ${e.done ? 'on' : ''}" data-check="${e.id}" aria-pressed="${e.done}" aria-label="${e.done ? '완료 취소' : '완료 체크'}" ${S.busy.has(e.id) ? 'disabled' : ''}>✓</button>
       <button class="body" type="button" data-open="${e.id}" title="${esc([cat?.name, e.memo].filter(Boolean).join(' — '))}">
-        <i class="dot"></i><span class="t">${esc(showTitle(e))}</span>${owner && !l && e.staff_title && e.staff_title.trim() && e.staff_title.trim() !== e.title ? '<span class="staff-diff" title="직원에게는 다른 제목으로 보여요">👥</span>' : ''}${e.memo ? '<span class="has-memo">📝</span>' : ''}
+        <i class="dot"></i><span class="t">${esc(showTitle(e))}</span>${owner && !S.preview && e.staff_title && e.staff_title.trim() && e.staff_title.trim() !== e.title ? '<span class="staff-diff" title="직원에게는 다른 제목으로 보여요">👥</span>' : ''}${e.memo ? '<span class="has-memo">📝</span>' : ''}
         ${who ? `<span class="who">${who}</span>` : ''}
       </button>
       ${canDrag && !e.done ? '<span class="grip" data-grip role="button" aria-label="끌어서 순서 바꾸기" title="끌어서 순서 바꾸기"><i></i><i></i><i></i></span>' : ''}
@@ -1266,7 +1262,7 @@ function bindUI() {
     const cat = catById(ev.category_id);
     modal({ title: ev.title, text: [cat && '분류: ' + cat.name, ev.memo, ev.done && '✓ 완료 ' + [ev.done_by, fmtWhen(ev.done_at)].filter(Boolean).join(' · ')].filter(Boolean).join('\n'), buttons: [{ label: '닫기', cls: 'primary' }] });
   };
-  $('#filters').onclick = e => { const b = e.target.closest('[data-f]'); if (!b) return; S.filter = b.dataset.f; render(); };
+  $('#filters').onclick = e => { if (!e.target.closest('[data-preview]')) return; S.preview = !S.preview; render(); };
   $('#btnAdd').onclick = () => editEvent(null);
   $('#btnGroups').onclick = openLinks;
   $('#btnSettings').onclick = openSettings;
