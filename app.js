@@ -519,13 +519,17 @@ function dayOrder(evs) {
   const done = evs.filter(e => e.done).sort((a, b) => String(a.done_at || '').localeCompare(String(b.done_at || '')));
   return [...open, ...done];
 }
+// 화면에 보여줄 일정 제목: 직원(링크)과 대표의 "직원 화면 미리보기"에서는 직원용 제목
+const staffTitle = e => (e.staff_title && e.staff_title.trim()) || e.title;
+const showTitle = e => (S.mode === 'owner' && activeLink() ? staffTitle(e) : e.title);
 function render() { renderFilters(); $('#legend').innerHTML = legendHtml(); renderCal(); renderDay(); }
 
 function renderFilters() {
   if (S.mode !== 'owner') return;
   const items = [{ id: 'all', name: '내 전체 일정' }, ...S.links.map(l => ({ id: l.id, name: `${KIND_ICON[l.kind]} ${l.name}` }))];
-  $('#filters').innerHTML = (S.links.length ? '<span class="flabel">직원 화면 미리보기</span>' : '') +
-    items.map(i => `<button class="fchip ${S.filter === i.id ? 'on' : ''}" data-f="${i.id}">${esc(i.name)}</button>`).join('');
+  $('#filters').innerHTML = (S.links.length ? '<span class="flabel">👀 직원 화면 미리보기</span>' : '') +
+    items.map(i => `<button class="fchip ${S.filter === i.id ? 'on' : ''}" data-f="${i.id}">${esc(i.name)}</button>`).join('') +
+    (activeLink() ? '<div class="preview-note">지금 직원에게 보이는 화면이에요 (직원용 제목). “내 전체 일정”을 누르면 돌아가요.</div>' : '');
 }
 
 // 폰: 한 달 달력이 화면 한 페이지 안에 들어오도록 달력 높이와 칸당 줄 수를 계산
@@ -558,7 +562,7 @@ function renderCal() {
     html += `<button class="${cls}" data-day="${k}" aria-label="${d.getMonth() + 1}월 ${d.getDate()}일 일정 ${evs.length}개">
       <span class="num">${d.getDate()}</span>
       ${evs.length > CHIP_MAX ? `<span class="cnt more-n">+${evs.length - CHIP_MAX}</span>` : ''}
-      <span class="chips">${evs.slice(0, CHIP_MAX).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${e.done ? STAR : ''}${esc(e.title)}</span>`).join('')}</span></button>`;
+      <span class="chips">${evs.slice(0, CHIP_MAX).map(e => `<span class="chip ${e.done ? 'done' : ''}" style="--c:${evColor(e)}">${e.done ? STAR : ''}${esc(showTitle(e))}</span>`).join('')}</span></button>`;
   }
   $('#grid').innerHTML = html;
 }
@@ -577,7 +581,7 @@ function renderDay() {
     return `<div class="ev ${e.done ? 'done' : ''}" data-id="${e.id}" style="--c:${evColor(e)}">
       <button class="check ${e.done ? 'on' : ''}" data-check="${e.id}" aria-pressed="${e.done}" aria-label="${e.done ? '완료 취소' : '완료 체크'}" ${S.busy.has(e.id) ? 'disabled' : ''}>✓</button>
       <button class="body" type="button" data-open="${e.id}" title="${esc([cat?.name, e.memo].filter(Boolean).join(' — '))}">
-        <i class="dot"></i><span class="t">${esc(e.title)}</span>${e.memo ? '<span class="has-memo">📝</span>' : ''}
+        <i class="dot"></i><span class="t">${esc(showTitle(e))}</span>${owner && !l && e.staff_title && e.staff_title.trim() && e.staff_title.trim() !== e.title ? '<span class="staff-diff" title="직원에게는 다른 제목으로 보여요">👥</span>' : ''}${e.memo ? '<span class="has-memo">📝</span>' : ''}
         ${who ? `<span class="who">${who}</span>` : ''}
       </button>
       ${canDrag && !e.done ? '<span class="grip" data-grip role="button" aria-label="끌어서 순서 바꾸기" title="끌어서 순서 바꾸기"><i></i><i></i><i></i></span>' : ''}
@@ -693,7 +697,10 @@ async function editEvent(id) {
   let catId = e ? e.category_id : (catById(lsGet(CAT_KEY)) ? lsGet(CAT_KEY) : S.cats[0]?.id) || null;
   const catButtons = () => S.cats.map(c => `<button type="button" style="--c:${c.color}" data-cat="${c.id}" class="${c.id === catId ? 'on' : ''}"><i></i>${esc(c.name)}</button>`).join('');
   const html = `
-    <label>일정 제목<input id="f_title" maxlength="100" required value="${esc(e?.title)}" placeholder="예: 매장 오픈 준비"></label>
+    <label>일정 제목 <small>(대표용 · 대표 달력에 보임)</small><input id="f_title" maxlength="100" required value="${esc(e?.title)}" placeholder="예: 매장 오픈 준비"></label>
+    <label class="staffbox">직원용 제목 <small>(직원 달력에 보임 · 대표 제목이 자동으로 복사돼요)</small>
+      <input id="f_stitle" maxlength="100" value="${esc(e ? staffTitle(e) : '')}" placeholder="비워두면 대표 제목이 그대로 보여요">
+      <button type="button" class="linkbtn" id="f_srelink" hidden>↺ 대표 제목과 똑같이</button></label>
     ${e ? `<label>날짜<input id="f_day" type="date" required value="${e.day}"></label>` : ""}
     <label>메모 (선택)<textarea id="f_memo" rows="3" maxlength="1000" placeholder="준비물, 장소 등">${esc(e?.memo)}</textarea></label>
     <div class="fieldlabel">분류 (색깔) <button type="button" class="linkbtn" id="f_cats_edit">분류 관리</button></div>
@@ -703,15 +710,18 @@ async function editEvent(id) {
     const day = e ? $('#f_day', ov).value : S.sel, ls = day ? S.links.filter(l => linkMatch(l, day)) : [];
     $('#f_share', ov).textContent = !day ? '' : ls.length ? `이 날짜 일정이 보이는 링크: ${ls.map(l => l.name).join(', ')}` : '이 날짜는 어떤 공유 링크에도 포함되지 않아요 (대표만 보임)';
   };
+  // 직원용 제목이 대표 제목과 같으면 "연결됨" → 대표 제목을 고치면 같이 바뀜. 직원용을 따로 고치면 연결이 풀림
+  let staffLinked = !e || !(e.staff_title && e.staff_title.trim()) || e.staff_title.trim() === e.title;
   const saveDraft = ov => lsSet(draftKey, JSON.stringify({
-    newId, title: $('#f_title', ov).value, memo: $('#f_memo', ov).value, catId, day: e ? $('#f_day', ov).value : S.sel, at: Date.now() }));
+    newId, title: $('#f_title', ov).value, stitle: $('#f_stitle', ov).value, staffLinked, memo: $('#f_memo', ov).value, catId, day: e ? $('#f_day', ov).value : S.sel, at: Date.now() }));
   const save = async ov => {
     saveDraft(ov);
     const title = $('#f_title', ov).value.trim(), day = e ? $('#f_day', ov).value : S.sel;
     if (!title) { $('#f_title', ov).focus(); toast('제목을 입력하세요'); return false; }
     if (!day) { toast('날짜를 선택하세요'); return false; }
+    const st = $('#f_stitle', ov).value.trim();
     const row = {
-      title, day, category_id: catId, color: catById(catId)?.color || e?.color || COLORS[0][0], memo: $('#f_memo', ov).value.trim(),
+      title, staff_title: st && st !== title ? st : null, day, category_id: catId, color: catById(catId)?.color || e?.color || COLORS[0][0], memo: $('#f_memo', ov).value.trim(),
       start_time: null, end_time: null,
       updated_at: new Date().toISOString(),
     };
@@ -739,14 +749,21 @@ async function editEvent(id) {
   buttons.push({ label: '취소', value: null, soft: true }, { label: e ? '저장' : '추가', cls: 'primary', run: save });
   const res = await modal({ title: e ? '일정 수정' : `${parse(S.sel).getMonth() + 1}월 ${parse(S.sel).getDate()}일 (${WD[parse(S.sel).getDay()]}) 일정 추가`, html, buttons, onMount: ov => {
     // 이어서 작성할 내용이 있으면 불러오기
-    if (draft && (draft.title || draft.memo) && (draft.title !== (e?.title || '') || draft.memo !== (e?.memo || '') || (e && draft.day !== e.day))) {
+    if (draft && (draft.title || draft.memo) && (draft.title !== (e?.title || '') || draft.memo !== (e?.memo || '') || (e && draft.day !== e.day) || (draft.stitle !== undefined && draft.stitle !== (e ? staffTitle(e) : '')))) {
       $('#f_title', ov).value = draft.title || '';
+      if (draft.stitle !== undefined) { $('#f_stitle', ov).value = draft.stitle; staffLinked = draft.staffLinked !== false; }
       $('#f_memo', ov).value = draft.memo || '';
       if (e && draft.day) $('#f_day', ov).value = draft.day;
       if (draft.catId && catById(draft.catId)) { catId = draft.catId; $('#f_cats', ov).innerHTML = catButtons(); }
       ov.dispatchEvent(new Event('input'));
       toast('작성 중이던 내용을 불러왔어요');
     }
+    const ft = $('#f_title', ov), fs2 = $('#f_stitle', ov), relink = $('#f_srelink', ov);
+    const drawLink = () => { relink.hidden = staffLinked; fs2.classList.toggle('linked', staffLinked); };
+    ft.addEventListener('input', () => { if (staffLinked) fs2.value = ft.value; });
+    fs2.addEventListener('input', () => { staffLinked = fs2.value.trim() === ft.value.trim(); drawLink(); });
+    relink.onclick = () => { staffLinked = true; fs2.value = ft.value; drawLink(); saveDraft(ov); };
+    drawLink();
     ov.addEventListener('input', () => saveDraft(ov));
     ov.addEventListener('click', () => setTimeout(() => ov.isConnected && saveDraft(ov), 0));
     showShare(ov); e && $('#f_day', ov).addEventListener('change', () => showShare(ov));
@@ -811,7 +828,7 @@ async function copyEvent(e) {
       <div id="cp_cal" style="margin-top:8px"></div>`,
     buttons: [{ label: '취소', value: false }, { label: '복사하기', cls: 'primary', value: true, run: async () => {
       if (!dates.size) { toast('복사할 날짜를 고르세요'); return false; }
-      const rows = [...dates].sort().map(day => ({ title: e.title, memo: e.memo || '', color: evColor(e), category_id: e.category_id || null, day }));
+      const rows = [...dates].sort().map(day => ({ title: e.title, staff_title: e.staff_title || null, memo: e.memo || '', color: evColor(e), category_id: e.category_id || null, day }));
       const { error } = await sb.from('cal_events').insert(rows);
       if (error) { toast('복사 실패: ' + error.message); return false; }
       await reload(); toast(`${rows.length}개 날짜에 복사했어요`);
@@ -1034,10 +1051,11 @@ async function searchEvents(q) {
   const pat = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
   const low = q.toLowerCase();
   const catIds = S.cats.filter(c => c.name.toLowerCase().includes(low)).map(c => c.id);
-  const cols = 'id, title, memo, day, category_id, color, done, done_by, done_at';
+  const cols = 'id, title, staff_title, memo, day, category_id, color, done, done_by, done_at';
   const qs = [
     sb.from('cal_events').select(cols).ilike('title', pat).order('day', { ascending: false }).limit(300),
     sb.from('cal_events').select(cols).ilike('memo', pat).order('day', { ascending: false }).limit(300),
+    sb.from('cal_events').select(cols).ilike('staff_title', pat).order('day', { ascending: false }).limit(300),
   ];
   if (catIds.length) qs.push(sb.from('cal_events').select(cols).in('category_id', catIds).order('day', { ascending: false }).limit(300));
   const rs = await Promise.all(qs);
@@ -1076,10 +1094,11 @@ async function openSearch() {
         const row = e => {
           const cat = catById(e.category_id);
           const memoHit = e.memo && e.memo.toLowerCase().includes(q.toLowerCase());
+          const staffHit = e.staff_title && e.staff_title !== e.title && e.staff_title.toLowerCase().includes(q.toLowerCase());
           return `<button type="button" class="srow" data-day="${e.day}" style="--c:${evColor(e)}">
             <i class="dot"></i><span class="sd">${e.day.slice(0, 4) !== today.slice(0, 4) ? e.day.slice(2, 4) + '년 ' : ''}${md(e.day)}</span>
             <span class="sbody"><span class="t">${e.done ? STAR : ''}${hl(e.title, q)}</span>
-            ${memoHit ? `<span class="sm">${hl(e.memo, q)}</span>` : cat ? `<span class="sm">${hl(cat.name, q)}</span>` : ''}</span></button>`;
+            ${staffHit ? `<span class="sm">👥 ${hl(e.staff_title, q)}</span>` : memoHit ? `<span class="sm">${hl(e.memo, q)}</span>` : cat ? `<span class="sm">${hl(cat.name, q)}</span>` : ''}</span></button>`;
         };
         list.innerHTML = (next.length ? `<div class="shead">다가오는 일정</div>${next.map(row).join('')}` : '')
                        + (past.length ? `<div class="shead">지난 일정</div>${past.map(row).join('')}` : '');
@@ -1126,8 +1145,8 @@ async function backupJson() {
 async function backupCsv() {
   const d = await fetchAll(), cat = Object.fromEntries(d.categories.map(c => [c.id, c.name]));
   const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-  const lines = [['날짜', '요일', '분류', '일정', '메모', '완료', '완료한 사람', '완료 시각'].map(q).join(',')]
-    .concat(d.events.map(e => [e.day, WD[parse(e.day).getDay()], cat[e.category_id] || '', e.title, e.memo, e.done ? 'O' : '', e.done_by, e.done_at ? fmtWhen(e.done_at) : ''].map(q).join(',')));
+  const lines = [['날짜', '요일', '분류', '일정', '직원용 제목', '메모', '완료', '완료한 사람', '완료 시각'].map(q).join(',')]
+    .concat(d.events.map(e => [e.day, WD[parse(e.day).getDay()], cat[e.category_id] || '', e.title, e.staff_title || '', e.memo, e.done ? 'O' : '', e.done_by, e.done_at ? fmtWhen(e.done_at) : ''].map(q).join(',')));
   saveFile(`팀캘린더-${ymd(new Date())}.csv`, '\ufeff' + lines.join('\r\n'), 'text/csv;charset=utf-8');
   toast(`엑셀용 파일을 받았어요 (일정 ${d.events.length}개)`);
 }
@@ -1140,8 +1159,8 @@ async function restoreBackup(file) {
   const cats = (d.categories || []).map(({ id, name, color, sort }) => ({ id, name, color, sort, owner: me }));
   for (const part of chunk(cats)) { const { error } = await sb.from('cal_categories').upsert(part); if (error) throw error; }
   const catIds = new Set([...cats.map(c => c.id), ...S.cats.map(c => c.id)]);
-  const evs = d.events.map(({ id, title, memo, day, color, category_id, done, done_by, done_at, created_at }) =>
-    ({ id, title, memo: memo || '', day, color, category_id: catIds.has(category_id) ? category_id : null, done: !!done, done_by, done_at, created_at, owner: me }));
+  const evs = d.events.map(({ id, title, staff_title, memo, day, color, category_id, done, done_by, done_at, created_at, sort }) =>
+    ({ id, title, staff_title: staff_title || null, sort: sort ?? null, memo: memo || '', day, color, category_id: catIds.has(category_id) ? category_id : null, done: !!done, done_by, done_at, created_at, owner: me }));
   for (const part of chunk(evs)) { const { error } = await sb.from('cal_events').upsert(part); if (error) throw error; }
   if (d.company && !S.company) await sb.from('cal_settings').upsert({ owner: me, company: d.company });
   await reload(); toast(`복원했어요 (일정 ${evs.length}개)`);

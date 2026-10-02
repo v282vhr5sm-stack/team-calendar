@@ -388,3 +388,12 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .cell.hol.today .num { color: #fff; background: var(--sun); }
 .holname { color: var(--sun); font-size: 14px; font-weight: 700; margin-left: 4px; }
 .day-head h3 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* ---- 직원용 제목 ---- */
+label small { font-weight: 400; color: var(--muted); font-size: 12px; }
+.staffbox { border-left: 3px solid var(--primary); padding-left: 10px; }
+.staffbox input.linked { color: var(--muted); }
+.staffbox .linkbtn { padding: 4px 0 0; }
+.staff-diff { flex: none; font-size: 12px; opacity: .75; }
+.preview-note { flex-basis: 100%; font-size: 12px; color: var(--primary); font-weight: 600; padding: 2px 2px 0; }
+.filters { flex-wrap: wrap; }
