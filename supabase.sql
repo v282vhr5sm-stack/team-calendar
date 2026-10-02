@@ -133,7 +133,7 @@ begin
       from public.cal_categories c where c.owner = l.owner), '[]'::jsonb),
     'events', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'id', e.id, 'title', e.title, 'memo', e.memo, 'day', e.day, 'color', coalesce(c.color, e.color), 'category_id', e.category_id,
+        'id', e.id, 'title', coalesce(nullif(trim(e.staff_title), ''), e.title), 'memo', e.memo, 'day', e.day, 'color', coalesce(c.color, e.color), 'category_id', e.category_id,
         'done', e.done, 'done_by', e.done_by, 'done_at', e.done_at)
         order by e.day, e.sort nulls last, e.created_at)
       from public.cal_events e left join public.cal_categories c on c.id = e.category_id
@@ -349,3 +349,6 @@ begin
   values (old.owner, tg_table_name, tg_op, old.id, to_jsonb(old) - 'pin_hash');
   return null;
 end $$;
+
+-- 9) 직원용 제목: 비어 있으면 대표 제목이 그대로 보임. 직원 링크(cal_view)에는 직원용 제목만 내려감 ---------
+alter table public.cal_events add column if not exists staff_title text;
