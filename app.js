@@ -1003,10 +1003,10 @@ async function openSettings() {
       <button type="button" class="btn wide" id="s_cats_btn" style="margin:8px 0 12px">🎨 분류 관리 (추가·수정·삭제)</button>
       <div class="sectitle">💾 백업</div>
       <p class="fieldlabel">일정은 지우기 전까지 사이트에 계속 남아 있어요. 혹시 모를 때를 위해 가끔 대표님 컴퓨터에 백업해 두세요.</p>
-      <button type="button" class="btn primary wide" id="s_bk_json">💾 내 컴퓨터에 백업하기</button>
+      <button type="button" class="btn primary wide" id="s_bk_json">💾 내 컴퓨터에 백업하기 (엑셀)</button>
       <p class="fieldlabel" id="s_bk_last" style="margin-top:6px"></p>
-      <div class="bk-more"><button type="button" class="linkbtn" id="s_bk_csv">엑셀 파일로도 받기</button><button type="button" class="linkbtn" id="s_bk_restore">백업 파일로 되돌리기</button></div>
-      <input type="file" id="s_bk_file" accept=".json,application/json" hidden>
+      <div class="bk-more"><button type="button" class="linkbtn" id="s_bk_restore">📂 엑셀 백업 파일로 되돌리기</button></div>
+      <input type="file" id="s_bk_file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.json" hidden>
       <div class="sectitle">🔑 비밀번호 찾기용 확인번호</div>
       <div class="recrow"><span id="s_rec_state"></span><button type="button" class="btn sm" id="s_rec_btn"></button></div>
       <a class="btn wide helpbtn" href="help.html">📘 관리 안내서 (문제가 생겼을 때 · Claude 없이 관리하기)</a>
@@ -1024,8 +1024,7 @@ async function openSettings() {
       const last = +lsGet('tc.lastBackup') || 0;
       $('#s_bk_last', ov).textContent = last ? '마지막 백업: ' + fmtWhen(new Date(last).toISOString()) : '아직 백업한 적이 없어요';
       const busy = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (e) { console.error(e); toast('실패: ' + (e.message || e)); } finally { btn.disabled = false; } };
-      $('#s_bk_json', ov).onclick = e => busy(e.currentTarget, backupJson);
-      $('#s_bk_csv', ov).onclick = e => busy(e.currentTarget, backupCsv);
+      $('#s_bk_json', ov).onclick = e => busy(e.currentTarget, backupXlsx);
       $('#s_bk_restore', ov).onclick = () => $('#s_bk_file', ov).click();
       $('#s_bk_file', ov).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) busy($('#s_bk_restore', ov), () => restoreBackup(f)); };
     },
@@ -1132,25 +1131,128 @@ function saveFile(name, text, type) {
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
 }
-async function backupJson() {
+/* ---- 엑셀(.xlsx) 백업·되돌리기 ---- */
+// 엑셀 기능(SheetJS)은 필요할 때만 불러옴
+let xlsxP = null;
+function loadXLSX() {
+  return xlsxP ||= new Promise((ok, fail) => {
+    if (window.XLSX) return ok(window.XLSX);
+    const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    sc.onload = () => ok(window.XLSX);
+    sc.onerror = () => { xlsxP = null; fail(new Error('엑셀 기능을 불러오지 못했어요 — 인터넷 연결을 확인하세요')); };
+    document.head.appendChild(sc);
+  });
+}
+const XL = { day: '날짜', wd: '요일', cat: '분류', title: '일정(대표용)', staff: '직원용 제목', memo: '메모', done: '완료', by: '완료한 사람', at: '완료 시각', sort: '순서', id: 'ID(지우지 마세요)' };
+const fmtDT = iso => { if (!iso) return ''; const t = new Date(iso); return `${ymd(t)} ${pad(t.getHours())}:${pad(t.getMinutes())}`; };
+
+async function backupXlsx() {
+  const X = await loadXLSX();
   const d = await fetchAll();
-  saveFile(`팀캘린더-백업-${ymd(new Date())}.json`, JSON.stringify({ app: 'team-calendar', version: 1, exported_at: new Date().toISOString(), ...d }, null, 1), 'application/json');
+  const catName = Object.fromEntries(d.categories.map(c => [c.id, c.name]));
+  const rows = d.events.map(e => ({
+    [XL.day]: e.day, [XL.wd]: WD[parse(e.day).getDay()], [XL.cat]: catName[e.category_id] || '',
+    [XL.title]: e.title, [XL.staff]: e.staff_title || '', [XL.memo]: e.memo || '',
+    [XL.done]: e.done ? 'O' : '', [XL.by]: e.done_by || '', [XL.at]: fmtDT(e.done_at),
+    [XL.sort]: e.sort ?? '', [XL.id]: e.id,
+  }));
+  const wb = X.utils.book_new();
+  const ws = X.utils.json_to_sheet(rows, { header: Object.values(XL) });
+  ws['!cols'] = [12, 5, 12, 40, 30, 30, 5, 10, 17, 6, 38].map(w => ({ wch: w }));
+  ws['!autofilter'] = { ref: ws['!ref'] };
+  X.utils.book_append_sheet(wb, ws, '일정');
+  const wc = X.utils.json_to_sheet(d.categories.map(c => ({ '분류 이름': c.name, '색': c.color, '순서': c.sort, [XL.id]: c.id })), { header: ['분류 이름', '색', '순서', XL.id] });
+  wc['!cols'] = [16, 10, 6, 38].map(w => ({ wch: w }));
+  X.utils.book_append_sheet(wb, wc, '분류');
+  const wi = X.utils.json_to_sheet([
+    { 항목: '앱', 값: 'team-calendar' }, { 항목: '회사', 값: d.company }, { 항목: '백업 시각', 값: fmtDT(new Date().toISOString()) },
+    { 항목: '일정 수', 값: d.events.length },
+    { 항목: '안내', 값: '이 파일을 설정 > 백업 파일로 되돌리기 에 올리면 복원돼요. 내용을 고치거나 줄을 추가해도 돼요. ID 칸은 지우지 마세요(새 줄은 비워두면 새 일정).' },
+  ]);
+  wi['!cols'] = [{ wch: 10 }, { wch: 90 }];
+  X.utils.book_append_sheet(wb, wi, '정보');
+  X.writeFile(wb, `팀캘린더-백업-${ymd(new Date())}.xlsx`);
   lsSet('tc.lastBackup', String(Date.now()));
-  toast(`컴퓨터에 백업했어요 (일정 ${d.events.length}개) — 다운로드 폴더에 저장됐어요`);
+  toast(`엑셀로 백업했어요 (일정 ${d.events.length}개) — 다운로드 폴더에 저장됐어요`);
 }
-async function backupCsv() {
-  const d = await fetchAll(), cat = Object.fromEntries(d.categories.map(c => [c.id, c.name]));
-  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-  const lines = [['날짜', '요일', '분류', '일정', '직원용 제목', '메모', '완료', '완료한 사람', '완료 시각'].map(q).join(',')]
-    .concat(d.events.map(e => [e.day, WD[parse(e.day).getDay()], cat[e.category_id] || '', e.title, e.staff_title || '', e.memo, e.done ? 'O' : '', e.done_by, e.done_at ? fmtWhen(e.done_at) : ''].map(q).join(',')));
-  saveFile(`팀캘린더-${ymd(new Date())}.csv`, '\ufeff' + lines.join('\r\n'), 'text/csv;charset=utf-8');
-  toast(`엑셀용 파일을 받았어요 (일정 ${d.events.length}개)`);
+
+// 엑셀 칸 값 → 'YYYY-MM-DD' (글자/엑셀 날짜 모두 처리)
+function toDay(v, X) {
+  if (v instanceof Date && !isNaN(v)) return ymd(v);
+  if (typeof v === 'number' && X) { const p = X.SSF.parse_date_code(v); if (p) return `${p.y}-${pad(p.m)}-${pad(p.d)}`; }
+  const m = String(v || '').trim().match(/^(\d{4})[-./ ]\s*(\d{1,2})[-./ ]\s*(\d{1,2})/);
+  if (!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return d.getMonth() === +m[2] - 1 ? `${m[1]}-${pad(+m[2])}-${pad(+m[3])}` : null;
 }
+function toIso(v, X) {   // '2026-10-02 14:03' → ISO
+  if (v instanceof Date && !isNaN(v)) return v.toISOString();
+  if (typeof v === 'number' && X) { const p = X.SSF.parse_date_code(v); if (p) return new Date(p.y, p.m - 1, p.d, p.H, p.M).toISOString(); }
+  const m = String(v || '').trim().match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)).toISOString() : null;
+}
+const isUuid = v => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || '').trim());
+
 async function restoreBackup(file) {
+  if (/\.json$/i.test(file.name)) return restoreJson(file);   // 예전 백업 파일도 계속 지원
+  if (!/\.xlsx?$/i.test(file.name)) throw new Error('엑셀 백업 파일(.xlsx)을 골라주세요');
+  const X = await loadXLSX();
+  const wb = X.read(await file.arrayBuffer(), { cellDates: true });
+  if (!wb.Sheets['일정']) throw new Error('팀 캘린더 엑셀 백업 파일이 아니에요 ("일정" 시트가 없어요)');
+  const me = S.user.id;
+  // 분류: ID 또는 이름으로 맞추고, 없는 이름은 새로 만듦
+  const catRows = wb.Sheets['분류'] ? X.utils.sheet_to_json(wb.Sheets['분류'], { defval: '' }) : [];
+  const cats = new Map(S.cats.map(c => [c.id, { ...c }]));
+  const byName = new Map(S.cats.map(c => [c.name.trim(), c.id]));
+  const catUpserts = [];
+  catRows.forEach((r, i) => {
+    const name = String(r['분류 이름'] || '').trim(); if (!name) return;
+    const id = isUuid(r[XL.id]) ? String(r[XL.id]).trim() : (byName.get(name) || crypto.randomUUID());
+    const color = /^#[0-9a-f]{6}$/i.test(String(r['색']).trim()) ? String(r['색']).trim() : (cats.get(id)?.color || COLORS[i % COLORS.length][0]);
+    const row = { id, owner: me, name, color, sort: Number(r['순서']) || i };
+    catUpserts.push(row); cats.set(id, row); byName.set(name, id);
+  });
+  // 일정
+  const rows = X.utils.sheet_to_json(wb.Sheets['일정'], { defval: '' });
+  const evs = [], skipped = [];
+  for (const [i, r] of rows.entries()) {
+    const title = String(r[XL.title] ?? r['일정'] ?? '').trim(), day = toDay(r[XL.day], X);
+    if (!title || !day) { if (title || r[XL.day]) skipped.push(i + 2); continue; }   // 엑셀 줄 번호
+    const catNameV = String(r[XL.cat] || '').trim();
+    let catId = catNameV ? byName.get(catNameV) : null;
+    if (catNameV && !catId) {   // 엑셀에서 새로 적은 분류 이름 → 새 분류
+      catId = crypto.randomUUID();
+      const row = { id: catId, owner: me, name: catNameV, color: COLORS[cats.size % COLORS.length][0], sort: cats.size };
+      catUpserts.push(row); cats.set(catId, row); byName.set(catNameV, catId);
+    }
+    const done = /^(o|ㅇ|y|yes|true|1|완료|v|✓)$/i.test(String(r[XL.done]).trim());
+    const st = String(r[XL.staff] || '').trim();
+    evs.push({
+      id: isUuid(r[XL.id]) ? String(r[XL.id]).trim() : crypto.randomUUID(), owner: me,
+      title, staff_title: st && st !== title ? st : null, memo: String(r[XL.memo] || '').trim(), day,
+      category_id: catId || null, color: cats.get(catId)?.color || COLORS[0][0],
+      done, done_by: done ? (String(r[XL.by] || '').trim() || null) : null,
+      done_at: done ? (toIso(r[XL.at], X) || new Date().toISOString()) : null,
+      sort: r[XL.sort] === '' || r[XL.sort] == null || isNaN(+r[XL.sort]) ? null : +r[XL.sort],
+    });
+  }
+  if (!evs.length) throw new Error('엑셀에서 되돌릴 일정을 찾지 못했어요' + (skipped.length ? ` (날짜·제목이 이상한 줄: ${skipped.slice(0, 5).join(', ')}번)` : ''));
+  const info = wb.Sheets['정보'] ? X.utils.sheet_to_json(wb.Sheets['정보'], { defval: '' }) : [];
+  const when = info.find(r => r['항목'] === '백업 시각')?.['값'] || '';
+  if (!(await confirmBox('엑셀 파일로 되돌릴까요?',
+    `${when ? when + ' 백업 · ' : ''}일정 ${evs.length}개${skipped.length ? ` (날짜나 제목이 비어 건너뛸 줄 ${skipped.length}개: ${skipped.slice(0, 5).join(', ')}번 줄)` : ''}\n지금 있는 일정은 지워지지 않아요. 엑셀에 있는 일정은 엑셀 내용으로 바뀌고, 없는 일정은 새로 생겨요.`,
+    '되돌리기', '취소'))) return;
+  const chunk = (a, n = 300) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+  for (const part of chunk(catUpserts)) { const { error } = await sb.from('cal_categories').upsert(part); if (error) throw error; }
+  for (const part of chunk(evs)) { const { error } = await sb.from('cal_events').upsert(part); if (error) throw error; }
+  await reload(); toast(`엑셀에서 되돌렸어요 (일정 ${evs.length}개)`);
+}
+async function restoreJson(file) {
   let d;
-  try { d = JSON.parse(await file.text()); } catch { throw new Error('백업 파일(.json)이 아니에요'); }
+  try { d = JSON.parse(await file.text()); } catch { throw new Error('백업 파일이 아니에요'); }
   if (d?.app !== 'team-calendar' || !Array.isArray(d.events)) throw new Error('팀 캘린더 백업 파일이 아니에요');
-  if (!(await confirmBox('백업 파일로 복원할까요?', `${(d.exported_at || '').slice(0, 10)} 백업 · 일정 ${d.events.length}개, 분류 ${(d.categories || []).length}개\n지금 있는 일정은 지워지지 않고, 백업에 있는 일정이 되살아나거나 백업 때 내용으로 돌아가요.`, '복원하기', '취소'))) return;
+  if (!(await confirmBox('백업 파일로 되돌릴까요?', `${(d.exported_at || '').slice(0, 10)} 백업 · 일정 ${d.events.length}개\n지금 있는 일정은 지워지지 않아요.`, '되돌리기', '취소'))) return;
   const me = S.user.id, chunk = (a, n = 300) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
   const cats = (d.categories || []).map(({ id, name, color, sort }) => ({ id, name, color, sort, owner: me }));
   for (const part of chunk(cats)) { const { error } = await sb.from('cal_categories').upsert(part); if (error) throw error; }
@@ -1158,8 +1260,7 @@ async function restoreBackup(file) {
   const evs = d.events.map(({ id, title, staff_title, memo, day, color, category_id, done, done_by, done_at, created_at, sort }) =>
     ({ id, title, staff_title: staff_title || null, sort: sort ?? null, memo: memo || '', day, color, category_id: catIds.has(category_id) ? category_id : null, done: !!done, done_by, done_at, created_at, owner: me }));
   for (const part of chunk(evs)) { const { error } = await sb.from('cal_events').upsert(part); if (error) throw error; }
-  if (d.company && !S.company) await sb.from('cal_settings').upsert({ owner: me, company: d.company });
-  await reload(); toast(`복원했어요 (일정 ${evs.length}개)`);
+  await reload(); toast(`되돌렸어요 (일정 ${evs.length}개)`);
 }
 /* ---------- 분류(색깔) 관리 (대표) ---------- */
 function legendHtml() { return S.cats.map(c => `<span class="lg" style="--c:${c.color}"><i></i>${esc(c.name)}</span>`).join(''); }
