@@ -401,3 +401,14 @@ label small { font-weight: 400; color: var(--muted); font-size: 12px; }
 .filters { flex-wrap: nowrap; }
 .preview-btn { font-weight: 600; }
 .preview-btn.on { background: #f59e0b; border-color: #f59e0b; color: #111; }
+
+/* 미리보기 버튼을 달력 제목줄 안으로 (버튼 줄 하나 절약) + 일정 줄 간격 촘촘하게 */
+#filters { display: inline-flex; padding: 0; margin: 0; }
+#filters .preview-btn { padding: 4px 10px; font-size: 12.5px; min-height: 30px; white-space: nowrap; }
+.month-bar { gap: 2px; }
+@media (max-width: 699px) {
+  .month-bar h2 { font-size: 17px; }
+  .chip { line-height: 1.25; }
+  .chips { gap: 1.5px; }
+  .cell { padding-bottom: 2px; }
+}

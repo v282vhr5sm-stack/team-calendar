@@ -526,7 +526,7 @@ function render() { renderFilters(); $('#legend').innerHTML = legendHtml(); rend
 
 function renderFilters() {
   if (S.mode !== 'owner') return;
-  $('#filters').innerHTML = `<button class="fchip preview-btn ${S.preview ? 'on' : ''}" data-preview aria-pressed="${!!S.preview}">${S.preview ? '👀 직원 화면 보는 중 · 누르면 돌아가기' : '👀 직원 화면 미리보기'}</button>`;
+  $('#filters').innerHTML = `<button class="fchip preview-btn ${S.preview ? 'on' : ''}" data-preview aria-pressed="${!!S.preview}">${S.preview ? '👀 직원 화면 보는 중' : '👀 직원 화면'}</button>`;
 }
 // 폰: 한 달 달력이 화면 한 페이지 안에 들어오도록 달력 높이와 칸당 줄 수를 계산
 function fitCalendar(weeks) {
@@ -538,7 +538,7 @@ function fitCalendar(weeks) {
   const head = $('.month-bar').offsetHeight + $('.dow').offsetHeight + ($('#legend').offsetHeight || 0);
   const rowH = (h - head - 1) / weeks;
   grid.style.gridTemplateRows = `repeat(${weeks}, minmax(0, 1fr))`;
-  CHIP_MAX = Math.max(1, Math.floor((rowH - 26) / 18.5));                 // 날짜 숫자 줄을 빼고 들어가는 일정 줄 수
+  CHIP_MAX = Math.max(1, Math.floor((rowH - 24) / 16.5));                 // 날짜 숫자 줄(약 24px)을 빼고, 일정 한 줄 약 16.5px
 }
 function renderCal() {
   $('#monthLabel').textContent = `${S.y}년 ${S.m + 1}월`;
