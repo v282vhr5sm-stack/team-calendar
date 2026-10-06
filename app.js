@@ -867,7 +867,7 @@ async function openLinks() {
               ${navigator.share ? `<button class="btn sm" data-a="share" data-id="${l.id}">보내기</button>` : ''}
               <button class="btn sm" data-a="edit" data-id="${l.id}">수정·보안</button>
               <button class="btn sm" data-a="toggle" data-id="${l.id}">${l.active === false ? '▶ 다시 열기' : '⏸ 멈추기'}</button>
-              <button class="btn sm" data-a="regen" data-id="${l.id}">링크 새로 만들기</button>
+              <button class="btn sm" data-a="regen" data-id="${l.id}">⚠️ 주소 바꾸기</button>
               <button class="btn sm danger" data-a="del" data-id="${l.id}">삭제</button>
             </div>
           </div>`).join('') || '<div class="empty">위 버튼으로 공유 링크를 만드세요.</div>';
@@ -890,10 +890,13 @@ async function openLinks() {
           if (error) return toast('실패: ' + error.message);
           await reload(); draw(); toast(l.active === false ? '링크를 다시 열었어요' : '링크를 멈췄어요. 직원 화면이 잠시 안 보여요');
         } else if (a === 'regen') {
-          if (!(await confirmBox('링크를 새로 만들까요?', `“${l.name}”의 기존 링크는 더 이상 열리지 않아요. 새 링크를 다시 보내줘야 합니다.`, '새로 만들기', '취소', true))) return;
+          if (!(await confirmBox('링크 주소를 바꿀까요?', `“${l.name}”을(를) 이미 받은 직원은 더 이상 열 수 없어요. 링크가 다른 사람에게 새어 나갔을 때만 쓰세요.
+바꾼 뒤에는 새 주소를 직원에게 다시 보내야 해요. (직원에게 링크를 보낼 때는 이 버튼이 아니라 [링크 복사]를 누르세요)`, '주소 바꾸기', '취소', true))) return;
           const { error } = await sb.from('cal_links').update({ token: newToken() }).eq('id', l.id);
           if (error) return toast('실패: ' + error.message);
-          await reload(); draw(); toast('새 링크를 만들었어요');
+          await reload(); draw();
+          const nl = S.links.find(x => x.id === l.id);
+          try { await navigator.clipboard.writeText(shareUrl(nl.token)); toast('주소를 바꾸고 새 링크를 복사했어요 — 직원에게 다시 보내주세요'); } catch { toast('주소를 바꿨어요 — [링크 복사]로 새 링크를 직원에게 다시 보내주세요'); }
         } else if (a === 'del') {
           if (!(await confirmBox('링크를 삭제할까요?', `“${l.name}” 링크로는 더 이상 볼 수 없어요. 일정은 그대로 남아요.`, '삭제', '취소', true))) return;
           const { error } = await sb.from('cal_links').delete().eq('id', l.id);
