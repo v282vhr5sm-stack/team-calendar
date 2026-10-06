@@ -416,7 +416,8 @@ async function loadMember() {
   return data;
 }
 
-function updateNameBtn() { const n = lsGet(NAME_KEY); $('#btnName').textContent = n ? `👤 ${n}` : '👤 이름 설정'; }
+const myName = () => lsGet(NAME_KEY) || (S.link && S.link.recipient) || '';
+function updateNameBtn() { const n = myName(); $('#btnName').textContent = n ? `👤 ${n}` : '👤 이름 설정'; }
 
 async function askName(first) {
   const cur = lsGet(NAME_KEY) || '';
@@ -452,7 +453,7 @@ async function reload() {
       if (r.error) { stopRealtime(); memberGate(r.error, r.name); return false; }
       S.gate = null; show('main');
       if (!S.ch) subscribe('cal-' + S.token);
-      S.link = r.link; S.company = r.company; S.events = r.events; S.cats = r.categories || [];
+      S.link = r.link; S.company = r.company; S.events = r.events; S.cats = r.categories || []; updateNameBtn();
       $('#brandTitle').textContent = r.link.name;
       $('#brandSub').textContent = [r.company, linkDesc(r.link)].filter(Boolean).join(' · ');
       document.title = `${r.link.name} · ${r.company || '팀 캘린더'}`;
@@ -661,11 +662,11 @@ async function toggleDone(id) {
   if (e.done) {
     const ok = await confirmBox('완료를 취소할까요?', `“${e.title}” 일정을 미완료로 되돌립니다.`, '완료 취소', '아니요', true);
     if (!ok) return;
-  } else if (S.mode === 'member' && !lsGet(NAME_KEY) && !S.askedName) {
+  } else if (S.mode === 'member' && !myName() && !S.askedName) {
     await askName(true);
   }
   const next = !e.done, prev = { done: e.done, done_by: e.done_by, done_at: e.done_at };
-  const who = S.mode === 'owner' ? '대표' : (lsGet(NAME_KEY) || null);
+  const who = S.mode === 'owner' ? '대표' : (myName() || null);
   Object.assign(e, { done: next, done_by: next ? who : null, done_at: next ? new Date().toISOString() : null });
   S.busy.add(id); render();
   try {
@@ -860,7 +861,7 @@ async function openLinks() {
         $('#glist', ov).innerHTML = S.links.map(l => `
           <div class="gitem">
             <div class="gtop"><span class="kind">${KIND_ICON[l.kind]} ${KIND_LABEL[l.kind]}</span><span class="gname">${esc(l.name)}</span></div>
-            <div class="gdesc">${esc(linkDesc(l))}</div>
+            <div class="gdesc">${esc(linkDesc(l))}<button type="button" class="rcpt ${l.recipient ? '' : 'empty'}" data-a="rcpt" data-id="${l.id}">👤 ${l.recipient ? esc(l.recipient) : '받는 직원 이름 적기'} ✏️</button></div>
             <div class="gbadges">${l.active === false ? '<span class="bdg off">⏸ 멈춤</span>' : ''}${l.pin_hash ? '<span class="bdg">🔒 PIN</span>' : ''}${l.expires_on ? `<span class="bdg">⏳ ${md(l.expires_on)}까지</span>` : ''}<span class="bdg muted">${l.last_seen ? '최근 접속 ' + fmtWhen(l.last_seen) : '아직 접속 없음'}</span></div>
             <div class="glink">${esc(shareUrl(l.token))}</div>
             <div class="gbtns">
@@ -883,7 +884,9 @@ async function openLinks() {
           try { await navigator.clipboard.writeText(url); toast(l.pin_hash ? '링크를 복사했어요. PIN은 따로 알려주세요' : '링크를 복사했어요. 카톡 등에 붙여넣으세요'); }
           catch { window.prompt('아래 링크를 복사하세요', url); }
         } else if (a === 'share') {
-          navigator.share({ title: l.name, text: `${S.company ? S.company + ' ' : ''}${l.name} (${linkDesc(l)})`, url }).catch(() => {});
+          navigator.share({ title: l.name, text: `${l.recipient ? l.recipient + '님, ' : ''}${S.company ? S.company + ' ' : ''}${l.name} (${linkDesc(l)})`, url }).catch(() => {});
+        } else if (a === 'rcpt') {
+          if (await editRecipient(l)) draw();
         } else if (a === 'edit') {
           if (await editLink(l)) draw();
         } else if (a === 'toggle') {
@@ -909,6 +912,23 @@ async function openLinks() {
   });
 }
 
+// 링크 받는 직원 이름 적기·고치기
+async function editRecipient(l) {
+  const r = await modal({
+    title: '받는 직원 이름',
+    text: `“${l.name}” 링크를 받는 직원 이름이에요. 그 직원이 완료 체크하면 이 이름으로 남아요.`,
+    html: `<label>직원 이름<input id="r_name" maxlength="30" value="${esc(l.recipient || '')}" placeholder="예: 김민수"></label>`,
+    buttons: [{ label: '취소', value: false, soft: true }, { label: '저장', cls: 'primary', value: true, run: async ov => {
+      const recipient = $('#r_name', ov).value.trim();
+      const { error } = await sb.from('cal_links').update({ recipient }).eq('id', l.id);
+      if (error) { toast('저장 실패: ' + error.message); return false; }
+      await reload(); toast(recipient ? `받는 사람: ${recipient}` : '받는 사람 이름을 지웠어요');
+    } }],
+    onMount: ov => { const i = $('#r_name', ov); i.focus(); i.select(); i.addEventListener('keydown', e => { if (e.key === 'Enter') $('.btn.primary', ov).click(); }); },
+  });
+  return r === true;
+}
+
 async function editLink(l, kind0) {
   let kind = l?.kind || kind0 || 'all';
   const wd = new Set(l?.weekdays || (kind === 'weekdays' ? [6, 0] : []));
@@ -922,6 +942,7 @@ async function editLink(l, kind0) {
     title: l ? '공유 링크 수정' : '새 공유 링크',
     html: `<div class="seg" id="l_kind">${['all', 'weekdays', 'dates'].map(k => `<button type="button" data-k="${k}">${KIND_ICON[k]} ${KIND_LABEL[k]}</button>`).join('')}</div>
       <label>링크 이름 (직원 화면 제목)<input id="l_name" maxlength="30" value="${esc(l?.name || defName[kind])}"></label>
+      <label>받는 직원 이름 (선택)<input id="l_rcpt" maxlength="30" value="${esc(l?.recipient || '')}" placeholder="예: 김민수"></label>
       <div id="p_all" class="fieldlabel">모든 날짜의 일정이 보여요.</div>
       <div id="p_weekdays"><div class="fieldlabel">보여줄 요일 (매주 반복)</div>
         <div class="wdays">${[1, 2, 3, 4, 5, 6, 0].map(i => `<button type="button" data-w="${i}" class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${WD[i]}</button>`).join('')}</div>
@@ -951,7 +972,7 @@ async function editLink(l, kind0) {
       if (!name) { toast('링크 이름을 입력하세요'); return false; }
       if (kind === 'weekdays' && !wd.size) { toast('요일을 하나 이상 고르세요'); return false; }
       if (kind === 'dates' && !dates.size) { toast('날짜를 하나 이상 고르세요'); return false; }
-      const row = { name, kind, weekdays: kind === 'weekdays' ? [...wd].sort() : [], dates: kind === 'dates' ? [...dates].sort() : [],
+      const row = { name, recipient: $('#l_rcpt', ov).value.trim(), kind, weekdays: kind === 'weekdays' ? [...wd].sort() : [], dates: kind === 'dates' ? [...dates].sort() : [],
         active: $('#l_active', ov).checked, expires_on: $('#l_exp', ov).value || null };
       const { data: saved, error } = l ? await sb.from('cal_links').update(row).eq('id', l.id).select('id').single()
                                        : await sb.from('cal_links').insert(row).select('id').single();
