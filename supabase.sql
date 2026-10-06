@@ -87,6 +87,7 @@ alter table public.cal_links add column if not exists pin_hash text;
 alter table public.cal_links add column if not exists pin_fails int not null default 0;
 alter table public.cal_links add column if not exists pin_locked_until timestamptz;
 alter table public.cal_links add column if not exists last_seen timestamptz;
+alter table public.cal_links add column if not exists recipient text not null default '';   -- 링크를 받는 직원 이름 (대표가 적음)
 
 create or replace function public.cal_link_match(p_kind text, p_weekdays int[], p_dates date[], p_day date)
 returns boolean language sql immutable as $$
@@ -127,7 +128,7 @@ begin
   end if;
   if p_to - p_from > 120 then p_to := p_from + 120; end if;
   return jsonb_build_object(
-    'link', jsonb_build_object('name', l.name, 'kind', l.kind, 'weekdays', to_jsonb(l.weekdays), 'dates', to_jsonb(l.dates)),
+    'link', jsonb_build_object('name', l.name, 'recipient', coalesce(l.recipient, ''), 'kind', l.kind, 'weekdays', to_jsonb(l.weekdays), 'dates', to_jsonb(l.dates)),
     'company', coalesce((select s.company from public.cal_settings s where s.owner = l.owner), ''),
     'categories', coalesce((select jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name, 'color', c.color) order by c.sort, c.created_at)
       from public.cal_categories c where c.owner = l.owner), '[]'::jsonb),
