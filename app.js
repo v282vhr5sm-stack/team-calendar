@@ -47,7 +47,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const hm = t => (t ? String(t).slice(0, 5) : '');
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} };
-const shareUrl = token => `${location.origin}${location.pathname}?g=${token}`;
+// 직원 링크는 항상 실제 인터넷 주소로 (시험용 localhost 화면에서 복사해도 다른 폰에서 열리게)
+const shareUrl = token => `${cfg.SITE_URL || location.origin + location.pathname}?g=${token}`;
 const newToken = () => crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
 function fmtWhen(iso) { if (!iso) return ''; const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; }
 function gridRange() { const first = new Date(S.y, S.m, 1); const a = new Date(first); a.setDate(1 - first.getDay()); const b = new Date(a); b.setDate(a.getDate() + 41); return [a, b]; }
