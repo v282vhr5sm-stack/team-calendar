@@ -419,3 +419,6 @@ label small { font-weight: 400; color: var(--muted); font-size: 12px; }
 /* 순서 끌기 중: 글자 선택·길게 누르기 메뉴 막기 */
 body.no-select, body.no-select * { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .day-list { position: relative; }
+/* 끄는 일정은 손가락을 바로 따라가고(전환 없음), 다른 일정은 부드럽게 비켜줌 */
+.ev.dragging { transition: none !important; will-change: transform; }
+.day-list .ev { will-change: auto; }

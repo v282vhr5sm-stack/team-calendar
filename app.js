@@ -594,66 +594,77 @@ const byOrder = (a, b) => a.day.localeCompare(b.day) || (a.sort ?? 1e9) - (b.sor
 let dragging = false;
 function setupReorder() {
   const list = $('#dayList');
+  // 부드럽게 끌기: 시작할 때 위치를 한 번만 재고, 끄는 동안은 그림(transform)만 움직임. 순서는 손을 뗄 때 한 번만 바꿈
   list.addEventListener('pointerdown', e => {
     const grip = e.target.closest('[data-grip]');
     if (!grip || S.mode !== 'owner' || dragging) return;
     e.preventDefault();
-    const row = grip.closest('.ev'), before = [...list.querySelectorAll('.ev:not(.done)')].map(r => r.dataset.id);
-    let startY = e.clientY, lastY = e.clientY;
+    const row = grip.closest('.ev');
+    const rows = [...list.querySelectorAll('.ev:not(.done)')];
+    const from = rows.indexOf(row); if (from < 0) return;
+    const sy0 = window.scrollY;
+    const rects = rows.map(r => { const b = r.getBoundingClientRect(); return { top: b.top + sy0, h: b.height }; });   // 페이지 기준 위치
+    const gap = rows.length > 1 ? rects[1].top - (rects[0].top + rects[0].h) : 6;
+    const me = rects[from], step = me.h + gap;
+    const minDy = rects[0].top - me.top;
+    const maxDy = (rects[rects.length - 1].top + rects[rects.length - 1].h) - (me.top + me.h);
+    const startPageY = e.clientY + sy0;
+    let lastY = e.clientY, to = from, raf = 0, scrollRaf = 0;
+
     dragging = true;
-    row.classList.add('dragging');
-    try { grip.setPointerCapture(e.pointerId); } catch {}
     document.body.classList.add('no-select');
-    // 끄는 일정은 "아직 안 한 일정" 목록 범위 안에서만 위아래로 움직임 (밖으로 못 나감)
-    const clampDy = dy => {
-      const open = [...list.querySelectorAll('.ev:not(.done)')];
-      const natTop = row.getBoundingClientRect().top - (parseFloat(row.dataset.dy) || 0);
-      const first = open[0] === row ? natTop : open[0].getBoundingClientRect().top;
-      const lastEl = open[open.length - 1];
-      const lastBottom = lastEl === row ? natTop + row.offsetHeight : lastEl.getBoundingClientRect().bottom;
-      return Math.max(first - natTop, Math.min(lastBottom - row.offsetHeight - natTop, dy));
+    row.classList.add('dragging');
+    rows.forEach(r => { if (r !== row) r.style.transition = 'transform .16s ease'; });
+    try { grip.setPointerCapture(e.pointerId); } catch {}
+
+    const frame = () => {
+      raf = 0;
+      const dy = Math.max(minDy, Math.min(maxDy, lastY + window.scrollY - startPageY));
+      row.style.transform = `translate3d(0, ${dy}px, 0)`;
+      const center = me.top + me.h / 2 + dy;
+      let n = 0;   // 끄는 일정 가운데보다 위에 있는 (다른) 일정 수 = 새 자리
+      rows.forEach((r, i) => { if (i !== from && rects[i].top + rects[i].h / 2 < center) n++; });
+      to = n;
+      rows.forEach((r, i) => {
+        if (i === from) return;
+        const shift = from < to && i > from && i <= to ? -step : from > to && i >= to && i < from ? step : 0;
+        r.style.transform = shift ? `translate3d(0, ${shift}px, 0)` : '';
+      });
     };
-    const place = () => {
-      const dy = clampDy(lastY - startY);
-      row.dataset.dy = dy;
-      row.style.transform = `translateY(${dy}px)`;
-      const prev = row.previousElementSibling, next = row.nextElementSibling;
-      if (next && next.classList.contains('ev') && !next.classList.contains('done')) {
-        const r = next.getBoundingClientRect();
-        if (lastY > r.top + r.height / 2) { const t = row.offsetTop; list.insertBefore(next, row); startY += row.offsetTop - t; return place(); }
-      }
-      if (prev && prev.classList.contains('ev') && !prev.classList.contains('done')) {
-        const r = prev.getBoundingClientRect();
-        if (lastY < r.top + r.height / 2) { const t = row.offsetTop; list.insertBefore(row, prev); startY += row.offsetTop - t; return place(); }
-      }
-    };
-    let scrollTimer = null;
-    const autoScroll = () => {   // 목록이 화면 밖까지 이어질 때만, 그 방향으로 조금씩 스크롤 (목록을 벗어나서 스크롤하지 않음)
+    const request = () => { if (!raf) raf = requestAnimationFrame(frame); };
+    // 목록이 화면 밖까지 이어질 때만 끝 쪽으로 천천히 스크롤
+    const autoScroll = () => {
       const edge = 70, h = window.innerHeight, lr = list.getBoundingClientRect();
-      const dy = lastY < edge && lr.top < 0 ? -8 : lastY > h - edge && lr.bottom > h ? 8 : 0;
-      if (dy) { const y0 = window.scrollY; window.scrollBy(0, dy); startY -= window.scrollY - y0; place(); }
-      scrollTimer = requestAnimationFrame(autoScroll);
+      const v = lastY < edge && lr.top < 0 ? -7 : lastY > h - edge && lr.bottom > h ? 7 : 0;
+      if (v) { window.scrollBy(0, v); request(); }
+      scrollRaf = requestAnimationFrame(autoScroll);
     };
-    scrollTimer = requestAnimationFrame(autoScroll);
-    const move = ev => { lastY = ev.clientY; place(); };
-    // 아이폰·안드로이드: 끄는 동안 페이지가 같이 스크롤되지 않게
-    const stopScroll = ev => { if (ev.cancelable) ev.preventDefault(); };
-    document.addEventListener('touchmove', stopScroll, { passive: false });
-    const end = () => {
-      cancelAnimationFrame(scrollTimer);
+    scrollRaf = requestAnimationFrame(autoScroll);
+
+    const move = ev => { if (ev.pointerId !== e.pointerId) return; lastY = ev.clientY; request(); };
+    const stopScroll = ev => { if (ev.cancelable) ev.preventDefault(); };   // 폰: 끄는 동안 페이지 스크롤 막기
+    const end = ev => {
+      if (ev && ev.pointerId !== undefined && ev.pointerId !== e.pointerId) return;
+      cancelAnimationFrame(raf); cancelAnimationFrame(scrollRaf);
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', end);
+      document.removeEventListener('pointercancel', end);
       document.removeEventListener('touchmove', stopScroll);
       document.body.classList.remove('no-select');
-      grip.removeEventListener('pointermove', move);
-      grip.removeEventListener('pointerup', end);
-      grip.removeEventListener('pointercancel', end);
-      row.classList.remove('dragging'); row.style.transform = ''; delete row.dataset.dy;
+      rows.forEach(r => { r.style.transition = ''; r.style.transform = ''; });
+      row.classList.remove('dragging');
       dragging = false;
-      const after = [...list.querySelectorAll('.ev:not(.done)')].map(r => r.dataset.id);
-      if (after.join() !== before.join()) saveOrder(after);
+      if (to !== from) {
+        const ids = rows.map(r => r.dataset.id);
+        const [id] = ids.splice(from, 1); ids.splice(to, 0, id);
+        saveOrder(ids);
+      }
     };
-    grip.addEventListener('pointermove', move);
-    grip.addEventListener('pointerup', end);
-    grip.addEventListener('pointercancel', end);
+    // 손가락이 ☰ 손잡이 밖으로 나가도 계속 따라가도록 화면 전체에서 받음
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', end);
+    document.addEventListener('pointercancel', end);
+    document.addEventListener('touchmove', stopScroll, { passive: false });
   });
 }
 async function saveOrder(ids) {
