@@ -603,8 +603,20 @@ function setupReorder() {
     dragging = true;
     row.classList.add('dragging');
     try { grip.setPointerCapture(e.pointerId); } catch {}
+    document.body.classList.add('no-select');
+    // 끄는 일정은 "아직 안 한 일정" 목록 범위 안에서만 위아래로 움직임 (밖으로 못 나감)
+    const clampDy = dy => {
+      const open = [...list.querySelectorAll('.ev:not(.done)')];
+      const natTop = row.getBoundingClientRect().top - (parseFloat(row.dataset.dy) || 0);
+      const first = open[0] === row ? natTop : open[0].getBoundingClientRect().top;
+      const lastEl = open[open.length - 1];
+      const lastBottom = lastEl === row ? natTop + row.offsetHeight : lastEl.getBoundingClientRect().bottom;
+      return Math.max(first - natTop, Math.min(lastBottom - row.offsetHeight - natTop, dy));
+    };
     const place = () => {
-      row.style.transform = `translateY(${lastY - startY}px)`;
+      const dy = clampDy(lastY - startY);
+      row.dataset.dy = dy;
+      row.style.transform = `translateY(${dy}px)`;
       const prev = row.previousElementSibling, next = row.nextElementSibling;
       if (next && next.classList.contains('ev') && !next.classList.contains('done')) {
         const r = next.getBoundingClientRect();
@@ -616,20 +628,25 @@ function setupReorder() {
       }
     };
     let scrollTimer = null;
-    const autoScroll = () => {   // 화면 위·아래 끝으로 끌면 자동으로 스크롤
-      const edge = 70, h = window.innerHeight;
-      const dy = lastY < edge ? -8 : lastY > h - edge ? 8 : 0;
+    const autoScroll = () => {   // 목록이 화면 밖까지 이어질 때만, 그 방향으로 조금씩 스크롤 (목록을 벗어나서 스크롤하지 않음)
+      const edge = 70, h = window.innerHeight, lr = list.getBoundingClientRect();
+      const dy = lastY < edge && lr.top < 0 ? -8 : lastY > h - edge && lr.bottom > h ? 8 : 0;
       if (dy) { const y0 = window.scrollY; window.scrollBy(0, dy); startY -= window.scrollY - y0; place(); }
       scrollTimer = requestAnimationFrame(autoScroll);
     };
     scrollTimer = requestAnimationFrame(autoScroll);
     const move = ev => { lastY = ev.clientY; place(); };
+    // 아이폰·안드로이드: 끄는 동안 페이지가 같이 스크롤되지 않게
+    const stopScroll = ev => { if (ev.cancelable) ev.preventDefault(); };
+    document.addEventListener('touchmove', stopScroll, { passive: false });
     const end = () => {
       cancelAnimationFrame(scrollTimer);
+      document.removeEventListener('touchmove', stopScroll);
+      document.body.classList.remove('no-select');
       grip.removeEventListener('pointermove', move);
       grip.removeEventListener('pointerup', end);
       grip.removeEventListener('pointercancel', end);
-      row.classList.remove('dragging'); row.style.transform = '';
+      row.classList.remove('dragging'); row.style.transform = ''; delete row.dataset.dy;
       dragging = false;
       const after = [...list.querySelectorAll('.ev:not(.done)')].map(r => r.dataset.id);
       if (after.join() !== before.join()) saveOrder(after);
