@@ -516,10 +516,18 @@ function activeLink() { return S.mode === 'member' ? S.link : null; }
 function visibleEvents() { const l = activeLink(); return l ? S.events.filter(e => linkMatch(l, e.day)) : S.events; }
 
 // 하루 안에서 보여줄 순서: 아직 안 한 일정(대표가 정한 순서) 위, 완료한 일정은 아래로 — 먼저 체크한 것부터
+// 분류 이름으로 순서 고정 (색을 바꿔도 그대로)
+//  안 한 일정: "납품"이 항상 맨 위 → 나머지는 ☰로 정한 순서
+//  완료한 일정: 납품완료 → 철수완료 → 연장 → AS → 그 밖의 분류, 같은 분류 안에서는 먼저 체크한 순서
+const OPEN_PIN = ['납품'];
+const DONE_RANK = ['납품완료', '철수완료', '연장', 'AS'];
+const catKey = e => (catById(e.category_id)?.name || '').replace(/s/g, '').toUpperCase();
+const openGroup = e => (OPEN_PIN.includes(catKey(e)) ? 'pin' : 'rest');
 function dayOrder(evs) {
   const open = evs.filter(e => !e.done);
-  const done = evs.filter(e => e.done).sort((a, b) => String(a.done_at || '').localeCompare(String(b.done_at || '')));
-  return [...open, ...done];
+  const rank = e => { const i = DONE_RANK.indexOf(catKey(e)); return i < 0 ? DONE_RANK.length : i; };
+  const done = evs.filter(e => e.done).sort((a, b) => rank(a) - rank(b) || String(a.done_at || '').localeCompare(String(b.done_at || '')));
+  return [...open.filter(e => openGroup(e) === 'pin'), ...open.filter(e => openGroup(e) === 'rest'), ...done];
 }
 // 화면에 보여줄 일정 제목: 직원(링크)과 대표의 "직원 화면 미리보기"에서는 직원용 제목
 const staffTitle = e => (e.staff_title && e.staff_title.trim()) || e.title;
@@ -576,13 +584,13 @@ function renderDay() {
   $('#dayList').innerHTML = evs.length ? evs.map(e => {
     const who = e.done ? [e.done_by, e.done_at && fmtWhen(e.done_at)].filter(Boolean).map(esc).join(' · ') || '완료' : '';
     const cat = catById(e.category_id);
-    return `<div class="ev ${e.done ? 'done' : ''}" data-id="${e.id}" style="--c:${evColor(e)}">
+    return `<div class="ev ${e.done ? 'done' : ''}" data-id="${e.id}" data-grp="${e.done ? 'done' : openGroup(e)}" style="--c:${evColor(e)}">
       <button class="check ${e.done ? 'on' : ''}" data-check="${e.id}" aria-pressed="${e.done}" aria-label="${e.done ? '완료 취소' : '완료 체크'}" ${S.busy.has(e.id) ? 'disabled' : ''}>✓</button>
       <button class="body" type="button" data-open="${e.id}" title="${esc([cat?.name, e.memo].filter(Boolean).join(' — '))}">
         <i class="dot"></i><span class="t">${esc(showTitle(e))}</span>${owner && !S.preview && e.staff_title && e.staff_title.trim() && e.staff_title.trim() !== e.title ? '<span class="staff-diff" title="직원에게는 다른 제목으로 보여요">👥</span>' : ''}${e.memo ? '<span class="has-memo">📝</span>' : ''}
         ${who ? `<span class="who">${who}</span>` : ''}
       </button>
-      ${canDrag && !e.done ? '<span class="grip" data-grip role="button" aria-label="끌어서 순서 바꾸기" title="끌어서 순서 바꾸기"><i></i><i></i><i></i></span>' : ''}
+      ${canDrag && !e.done && evs.filter(x => !x.done && openGroup(x) === openGroup(e)).length > 1 ? '<span class="grip" data-grip role="button" aria-label="끌어서 순서 바꾸기" title="끌어서 순서 바꾸기"><i></i><i></i><i></i></span>' : ''}
     </div>`;
   }).join('') : `<div class="empty">${
       l && !linkMatch(l, S.sel) ? (owner ? `이 날은 “${esc(l.name)}” 링크에 포함되지 않아요.` : '이 날은 공유된 일정이 없어요.')
@@ -600,7 +608,7 @@ function setupReorder() {
     if (!grip || S.mode !== 'owner' || dragging) return;
     e.preventDefault();
     const row = grip.closest('.ev');
-    const rows = [...list.querySelectorAll('.ev:not(.done)')];
+    const rows = [...list.querySelectorAll(`.ev[data-grp="${grip.closest('.ev').dataset.grp}"]`)];   // 같은 그룹 안에서만
     const from = rows.indexOf(row); if (from < 0) return;
     const sy0 = window.scrollY;
     const rects = rows.map(r => { const b = r.getBoundingClientRect(); return { top: b.top + sy0, h: b.height }; });   // 페이지 기준 위치
@@ -657,7 +665,10 @@ function setupReorder() {
       if (to !== from) {
         const ids = rows.map(r => r.dataset.id);
         const [id] = ids.splice(from, 1); ids.splice(to, 0, id);
-        saveOrder(ids);
+        // 안 한 일정 전체 순서 = 다른 그룹은 그대로, 이 그룹만 바뀐 순서로
+        const grp = row.dataset.grp; let k = 0;
+        const all = [...list.querySelectorAll('.ev:not(.done)')].map(r => (r.dataset.grp === grp ? ids[k++] : r.dataset.id));
+        saveOrder(all);
       }
     };
     // 손가락이 ☰ 손잡이 밖으로 나가도 계속 따라가도록 화면 전체에서 받음
