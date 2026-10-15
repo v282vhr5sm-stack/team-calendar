@@ -516,18 +516,16 @@ function activeLink() { return S.mode === 'member' ? S.link : null; }
 function visibleEvents() { const l = activeLink(); return l ? S.events.filter(e => linkMatch(l, e.day)) : S.events; }
 
 // 하루 안에서 보여줄 순서: 아직 안 한 일정(대표가 정한 순서) 위, 완료한 일정은 아래로 — 먼저 체크한 것부터
-// 분류 이름으로 순서 고정 (색을 바꿔도 그대로)
-//  안 한 일정: "납품"이 항상 맨 위 → 나머지는 ☰로 정한 순서
-//  완료한 일정: 납품완료 → 철수완료 → 연장 → AS → 그 밖의 분류, 같은 분류 안에서는 먼저 체크한 순서
-const OPEN_PIN = ['납품'];
-const DONE_RANK = ['납품완료', '철수완료', '연장', 'AS'];
-const catKey = e => (catById(e.category_id)?.name || '').replace(/s/g, '').toUpperCase();
-const openGroup = e => (OPEN_PIN.includes(catKey(e)) ? 'pin' : 'rest');
+// 하루 안의 순서 = ⚙️ 설정의 분류 순서 (위에 있는 분류부터)
+//  안 한 일정: 분류 순서대로 묶고, 같은 분류 안에서는 ☰로 정한 순서
+//  완료한 일정: 분류 순서대로 묶고, 같은 분류 안에서는 먼저 체크한 순서
+//  분류 없는 일정은 맨 아래
+const catRank = e => { const i = S.cats.findIndex(c => c.id === e.category_id); return i < 0 ? 1e6 : i; };
+const openGroup = e => 'c:' + (catRank(e) < 1e6 ? e.category_id : 'none');
 function dayOrder(evs) {
-  const open = evs.filter(e => !e.done);
-  const rank = e => { const i = DONE_RANK.indexOf(catKey(e)); return i < 0 ? DONE_RANK.length : i; };
-  const done = evs.filter(e => e.done).sort((a, b) => rank(a) - rank(b) || String(a.done_at || '').localeCompare(String(b.done_at || '')));
-  return [...open.filter(e => openGroup(e) === 'pin'), ...open.filter(e => openGroup(e) === 'rest'), ...done];
+  const open = evs.filter(e => !e.done).sort((a, b) => catRank(a) - catRank(b));   // 같은 분류 안에서는 기존(☰) 순서 유지
+  const done = evs.filter(e => e.done).sort((a, b) => catRank(a) - catRank(b) || String(a.done_at || '').localeCompare(String(b.done_at || '')));
+  return [...open, ...done];
 }
 // 화면에 보여줄 일정 제목: 직원(링크)과 대표의 "직원 화면 미리보기"에서는 직원용 제목
 const staffTitle = e => (e.staff_title && e.staff_title.trim()) || e.title;
