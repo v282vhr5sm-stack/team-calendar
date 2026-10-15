@@ -730,7 +730,7 @@ async function editEvent(id) {
   let draft = null; try { draft = JSON.parse(lsGet(draftKey) || 'null'); } catch {}
   const newId = draft?.newId || (e ? null : crypto.randomUUID());   // 새 일정 id를 미리 정해두면 다시 눌러도 두 번 생기지 않음
   let catId = e ? e.category_id : (catById(lsGet(CAT_KEY)) ? lsGet(CAT_KEY) : S.cats[0]?.id) || null;
-  const catButtons = () => S.cats.map(c => `<button type="button" style="--c:${c.color}" data-cat="${c.id}" class="${c.id === catId ? 'on' : ''}"><i></i>${esc(c.name)}</button>`).join('');
+  const catButtons = () => S.cats.map(c => `<button type="button" style="--c:${c.color}" data-cat="${c.id}" class="${c.id === catId ? 'on' : ''} ${isLightColor(c.color) ? 'lt' : ''}">${esc(c.name)}</button>`).join('');
   const html = `
     <label>일정 제목 <small>(대표용 · 대표 달력에 보임)</small><input id="f_title" maxlength="100" required value="${esc(e?.title)}" placeholder="예: 매장 오픈 준비"></label>
     <label class="staffbox">직원용 제목 <small>(직원 달력에 보임 · 대표 제목이 자동으로 복사돼요)</small>
@@ -1325,7 +1325,9 @@ async function restoreJson(file) {
   await reload(); toast(`되돌렸어요 (일정 ${evs.length}개)`);
 }
 /* ---------- 분류(색깔) 관리 (대표) ---------- */
-function legendHtml() { return S.cats.map(c => `<span class="lg" style="--c:${c.color}"><i></i>${esc(c.name)}</span>`).join(''); }
+// 밝은 색(노랑·하늘 등)은 검정 글씨, 나머지는 흰 글씨
+function isLightColor(hex) { const n = parseInt(String(hex || '').slice(1), 16); if (isNaN(n)) return false; return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 > 165; }
+function legendHtml() { return S.cats.map(c => `<span class="lg ${isLightColor(c.color) ? 'lt' : ''}" style="--c:${c.color}">${esc(c.name)}</span>`).join(''); }
 
 async function openCategories() {
   // 편집용 사본: 저장을 눌러야 서버에 반영
