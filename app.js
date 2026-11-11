@@ -192,7 +192,7 @@ async function boot() {
     if (!showSnap()) S.mode = null;
   }
   const { data: { session } } = await sb.auth.getSession();
-  if (!session && S.mode === 'owner') { dropSnap(); S.mode = null; }
+  if (!session && S.mode === 'owner') { S.mode = null; }   // 저장본은 지우지 않음 (다시 로그인하면 바로 보임)
   if (RECOVERY || AUTH_ERR) history.replaceState(null, '', location.pathname);   // 주소창의 인증 정보 지우기
   if (AUTH_ERR && !session) {
     showLogin();
@@ -1124,7 +1124,7 @@ async function openSettings() {
       $('#s_bk_file', ov).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) busy($('#s_bk_restore', ov), () => restoreBackup(f)); };
     },
     buttons: [
-      { label: '로그아웃', cls: 'danger left', run: async () => { dropSnap(); lsSet('tc.owner', null); await sb.auth.signOut(); showLogin(); } },
+      { label: '로그아웃', cls: 'danger left', run: async () => { lsSet('tc.owner', null); await sb.auth.signOut(); showLogin(); } },
       { label: '닫기' },
       { label: '저장', cls: 'primary', run: async ov => {
         const company = $('#s_co', ov).value.trim();
