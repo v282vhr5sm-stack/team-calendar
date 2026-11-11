@@ -156,13 +156,43 @@ function loadHolidays() {
   fetch('holidays.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : null)
     .then(j => { if (j && j.days) { HOL = j.days; if (S.mode && !$('#main').hidden) render(); } }).catch(() => {});
 }
+/* ---------- 빠른 시작: 마지막 화면 저장본 ---------- */
+const snapKey = () => S.mode === 'member' ? 'tc.snap.m.' + S.token : 'tc.snap.owner';
+function saveSnap() {
+  try {
+    const d = { y: S.y, m: S.m, at: Date.now(), events: S.events, cats: S.cats, company: S.company };
+    if (S.mode === 'owner') Object.assign(d, { links: S.links, uid: S.user?.id });
+    else d.link = S.link;
+    localStorage.setItem(snapKey(), JSON.stringify(d));
+  } catch {}
+}
+function showSnap(uid) {
+  let d = null; try { d = JSON.parse(localStorage.getItem(snapKey()) || 'null'); } catch {}
+  if (!d || d.y !== S.y || d.m !== S.m || (uid && d.uid && d.uid !== uid)) return false;
+  S.events = d.events || []; S.cats = d.cats || []; S.company = d.company || '';
+  if (S.mode === 'owner') { S.links = d.links || []; $('#brandTitle').textContent = S.company || '팀 캘린더'; }
+  else if (d.link) {
+    S.link = d.link;
+    $('#brandTitle').textContent = d.link.name;
+    $('#brandSub').textContent = [d.company, linkDesc(d.link)].filter(Boolean).join(' · ');
+  }
+  render();
+  return true;
+}
+const dropSnap = () => { try { localStorage.removeItem(snapKey()); } catch {} };
+
 async function boot() {
   loadHolidays();
   const now = new Date(); S.y = now.getFullYear(); S.m = now.getMonth(); S.sel = ymd(now);
   bindUI();
   const t = new URLSearchParams(location.search).get('g');
   if (t) { lsSet(TOKEN_KEY, t); return startMember(t); }
+  if (lsGet('tc.owner') && !RECOVERY && !AUTH_ERR) {
+    S.mode = 'owner'; document.body.className = 'owner'; show('main');
+    if (!showSnap()) S.mode = null;
+  }
   const { data: { session } } = await sb.auth.getSession();
+  if (!session && S.mode === 'owner') { dropSnap(); S.mode = null; }
   if (RECOVERY || AUTH_ERR) history.replaceState(null, '', location.pathname);   // 주소창의 인증 정보 지우기
   if (AUTH_ERR && !session) {
     showLogin();
@@ -331,6 +361,7 @@ async function startOwner(user) {
   show('main');
   $('#brandTitle').textContent = '팀 캘린더';
   $('#brandSub').textContent = user.email;
+  showSnap(user.id);
   const ok = await reload();
   if (!ok) return;
   const pending = lsGet('tc.pendingCompany');
@@ -375,6 +406,7 @@ async function startMember(token) {
   S.mode = 'member'; S.token = token; S.user = null;
   document.body.className = 'member';
   show('main');
+  showSnap();
   updateNameBtn();
   const ok = await reload();
   if (!ok) return;
@@ -446,11 +478,11 @@ async function reload() {
       const r = await loadMember();
       if (id !== S.reqId) return true;
       if (!r) {
-        stopRealtime(); lsSet(TOKEN_KEY, null);
+        stopRealtime(); dropSnap(); lsSet(TOKEN_KEY, null);
         notice('🔒', '링크를 열 수 없어요', '링크가 바뀌었거나 삭제되었어요. 대표님께 새 링크를 받아주세요.', { label: '대표 로그인', run: showLogin });
         return false;
       }
-      if (r.error) { stopRealtime(); memberGate(r.error, r.name); return false; }
+      if (r.error) { stopRealtime(); dropSnap(); memberGate(r.error, r.name); return false; }
       S.gate = null; show('main');
       if (!S.ch) subscribe('cal-' + S.token);
       S.link = r.link; S.company = r.company; S.events = r.events; S.cats = r.categories || []; updateNameBtn();
@@ -459,6 +491,7 @@ async function reload() {
       document.title = `${r.link.name} · ${r.company || '팀 캘린더'}`;
     } else return false;
     render();
+    S.lastLoad = Date.now(); saveSnap();
     return true;
   } catch (err) {
     console.error(err);
@@ -496,7 +529,7 @@ function subscribe(topic) {
   S.ch = sb.channel(topic)
     .on('broadcast', { event: 'changed' }, () => scheduleReload())
     .subscribe(status => {
-      if (status === 'SUBSCRIBED') { setLive('on'); scheduleReload(0); }   // 끊겼던 사이 변경도 반영
+      if (status === 'SUBSCRIBED') { setLive('on'); if (Date.now() - (S.lastLoad || 0) > 5000) scheduleReload(0); }   // 끊겼던 사이 변경도 반영
       else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setLive('off');
     });
 }
@@ -1091,7 +1124,7 @@ async function openSettings() {
       $('#s_bk_file', ov).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) busy($('#s_bk_restore', ov), () => restoreBackup(f)); };
     },
     buttons: [
-      { label: '로그아웃', cls: 'danger left', run: async () => { await sb.auth.signOut(); showLogin(); } },
+      { label: '로그아웃', cls: 'danger left', run: async () => { dropSnap(); lsSet('tc.owner', null); await sb.auth.signOut(); showLogin(); } },
       { label: '닫기' },
       { label: '저장', cls: 'primary', run: async ov => {
         const company = $('#s_co', ov).value.trim();
